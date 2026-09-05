@@ -18,6 +18,16 @@ import io.github.biglv666.authkit.guard.LoginAttemptGuard;
 import io.github.biglv666.authkit.interceptor.AuthInterceptor;
 import io.github.biglv666.authkit.management.ManagementTokenFilter;
 import io.github.biglv666.authkit.management.OnlineSessionController;
+import io.github.biglv666.authkit.oauth2.OAuth2Properties;
+import io.github.biglv666.authkit.oauth2.client.GitHubIdentityProvider;
+import io.github.biglv666.authkit.oauth2.client.IdentityProvider;
+import io.github.biglv666.authkit.oauth2.client.OAuth2ClientController;
+import io.github.biglv666.authkit.oauth2.client.OAuth2UserBinder;
+import io.github.biglv666.authkit.oauth2.client.WeComIdentityProvider;
+import io.github.biglv666.authkit.oauth2.server.OAuth2AuthorizationServerController;
+import io.github.biglv666.authkit.oauth2.store.InMemoryOAuth2KeyValueStore;
+import io.github.biglv666.authkit.oauth2.store.OAuth2KeyValueStore;
+import io.github.biglv666.authkit.oauth2.store.RedisOAuth2KeyValueStore;
 import io.github.biglv666.authkit.spi.PasswordEncoder;
 import io.github.biglv666.authkit.spi.PermissionProvider;
 import io.github.biglv666.authkit.token.JwtTokenCodec;
@@ -32,6 +42,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -54,7 +65,7 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
  */
 @AutoConfiguration
 @ConditionalOnProperty(prefix = "auth-kit", name = "enabled", matchIfMissing = true)
-@EnableConfigurationProperties(AuthKitProperties.class)
+@EnableConfigurationProperties({AuthKitProperties.class, OAuth2Properties.class})
 public class AuthKitAutoConfiguration {
 
     private static final Logger log = LoggerFactory.getLogger(AuthKitAutoConfiguration.class);
@@ -229,6 +240,83 @@ public class AuthKitAutoConfiguration {
         public AuthKitDefaultExceptionHandler authKitDefaultExceptionHandler() {
             return new AuthKitDefaultExceptionHandler();
         }
+    }
+
+    // ── OAuth2 / SSO：默认全关，启用任一侧才装配 ──
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "auth-kit.oauth2", name = "server.enabled", havingValue = "true")
+    static class OAuth2ServerConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(OAuth2KeyValueStore.class)
+        public OAuth2KeyValueStore oauth2KeyValueStore(AuthKitProperties properties,
+                                                       ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            return AuthKitAutoConfiguration.createOAuth2Store(properties, factoryProvider);
+        }
+
+        @Bean
+        public OAuth2AuthorizationServerController oauth2AuthorizationServerController(
+                OAuth2Properties oauth2Properties, OAuth2KeyValueStore oauth2KeyValueStore,
+                AuthManager authManager, TokenResolver tokenResolver) {
+            return new OAuth2AuthorizationServerController(oauth2Properties, oauth2KeyValueStore,
+                    authManager, tokenResolver);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "auth-kit.oauth2.client", name = "enabled", havingValue = "true")
+    static class OAuth2ClientConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(OAuth2KeyValueStore.class)
+        public OAuth2KeyValueStore oauth2KeyValueStoreForClient(AuthKitProperties properties,
+                                                                ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            return AuthKitAutoConfiguration.createOAuth2Store(properties, factoryProvider);
+        }
+
+        @Bean
+        public OAuth2ClientController oauth2ClientController(OAuth2Properties oauth2Properties,
+                                                             OAuth2KeyValueStore oauth2KeyValueStore,
+                                                             AuthManager authManager,
+                                                             ObjectProvider<OAuth2UserBinder> binderProvider,
+                                                             ObjectProvider<IdentityProvider> identityProviders) {
+            // 内置 provider 与业务自定义 Bean（按 name() 去重，自定义优先）
+            java.util.Map<String, IdentityProvider> providers = new java.util.LinkedHashMap<>();
+            providers.put("github", new GitHubIdentityProvider());
+            providers.put("wecom", new WeComIdentityProvider());
+            for (IdentityProvider custom : identityProviders) {
+                providers.put(custom.name(), custom);
+            }
+            OAuth2UserBinder binder = binderProvider.getIfAvailable();
+            if (binder == null) {
+                throw new IllegalStateException(
+                        "启用 auth-kit.oauth2.client 必须注册 OAuth2UserBinder Bean（第三方档案 → 本地 userId 的绑定逻辑）");
+            }
+            return new OAuth2ClientController(oauth2Properties, oauth2KeyValueStore, authManager, binder, providers);
+        }
+    }
+
+    /** OAuth2 KV 存储选择逻辑：有 Redis 用 Redis，否则内存 */
+    private static OAuth2KeyValueStore createOAuth2Store(AuthKitProperties properties,
+                                                         ObjectProvider<RedisConnectionFactory> factoryProvider) {
+        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+        if (factory != null) {
+            return new RedisOAuth2KeyValueStore(new StringRedisTemplate(factory), properties.getKeyPrefix());
+        }
+        return new InMemoryOAuth2KeyValueStore();
+    }
+
+    /** 会话事件 → Spring 事件广播（SSO 各应用监听做本地清理） */
+    @Bean
+    public InitializingBean authKitEventBridge(AuthManager authManager,
+                                               ObjectProvider<ApplicationEventPublisher> publisherProvider) {
+        return () -> {
+            ApplicationEventPublisher publisher = publisherProvider.getIfAvailable();
+            if (publisher != null) {
+                authManager.setEventListener(publisher::publishEvent);
+            }
+        };
     }
 
     // ── Web 层 ──

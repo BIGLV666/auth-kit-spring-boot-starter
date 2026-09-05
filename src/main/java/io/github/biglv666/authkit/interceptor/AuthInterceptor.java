@@ -110,9 +110,12 @@ public class AuthInterceptor implements HandlerInterceptor {
         AuthContext.clear();
     }
 
-    /** 白名单匹配（Ant 风格），命中则完全放行 */
+    /** 白名单匹配（Ant 风格）+ OAuth2 端点内置放行（authorize/token/login/callback 自管认证流程） */
     private boolean isWhitelisted(HttpServletRequest request) {
         String uri = request.getRequestURI();
+        if (uri.contains("/oauth2/")) {
+            return true;
+        }
         for (String pattern : properties.getWhitelist()) {
             if (pathMatcher.match(pattern, uri)) {
                 return true;

@@ -35,6 +35,9 @@
 | **二级认证** | `@RequireSafe` + `openSafe/isSafe/closeSafe`，敏感操作 N 分钟免二次验密 |
 | **JWT 可选模式** | `token.mode=jwt`，HS256 纯 JDK 实现；本地验签 + 墓碑黑名单，踢人/顶号语义不变 |
 | **会话并发治理** | `device-max-sessions` 按设备覆盖上限；管理端点支持逐设备踢出 |
+| **OAuth2 授权服务器** | `/oauth2/authorize` + `/oauth2/token`，authorization_code + refresh_token；**签发的 access_token 就是本组件会话凭证** |
+| **第三方登录客户端** | `IdentityProvider` SPI，内置 GitHub / 企业微信；业务只实现"档案 → userId"绑定 |
+| **单点登录** | 多应用共享 Redis 会话即 SSO；登出/踢人全局生效 + 会话事件广播 |
 
 ## 快速开始
 
@@ -149,6 +152,8 @@ auth-kit:
   whitelist:
     - /login
 ```
+
+OAuth2 / SSO 配置见 [USAGE.md](docs/USAGE.md#9-oauth2--sso)，要点：授权服务器端点默认关闭；access_token 即本组件会话凭证，资源端无需新增校验代码。
 
 ## 下线语义对照（前端处理指南）
 

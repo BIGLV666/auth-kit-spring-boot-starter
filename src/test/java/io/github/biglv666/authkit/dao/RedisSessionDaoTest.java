@@ -55,10 +55,12 @@ class RedisSessionDaoTest extends AbstractSessionDaoContractTest {
         }
     }
 
-    @BeforeEach
-    void initPrefix() {
-        // 每个测试用独立前缀，避免用例间数据串扰
+    @Override
+    protected SessionDao createDao() {
+        // 前缀必须随 createDao 一起更新：父类 @BeforeEach 先于子类执行，
+        // 若只在子类 @BeforeEach 里赋前缀，首个用例会拿到上一个测试的旧前缀
         prefix = "auth-kit:it:" + UUID.randomUUID() + ":";
+        return new RedisSessionDao(template, prefix);
     }
 
     @AfterEach
@@ -67,11 +69,6 @@ class RedisSessionDaoTest extends AbstractSessionDaoContractTest {
         if (!keys.isEmpty()) {
             template.delete(keys);
         }
-    }
-
-    @Override
-    protected SessionDao createDao() {
-        return new RedisSessionDao(template, prefix);
     }
 
     @Test

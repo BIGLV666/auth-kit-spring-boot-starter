@@ -219,6 +219,71 @@ curl -X DELETE -H "X-Auth-Kit-Token: xxx" "http://host/auth-kit/online/10001?dev
 curl -X POST  -H "X-Auth-Kit-Token: xxx" "http://host/auth-kit/online/10001/kick"   # 踢人（旧端收"被强制下线"文案）
 ```
 
+## 9. OAuth2 / SSO
+
+三个能力共用一套会话体系，默认全关、互不依赖：
+
+### 9.1 轻量授权服务器（给别人发令牌）
+
+```yaml
+auth-kit:
+  oauth2:
+    server:
+      enabled: true
+      login-page: /login              # 未登录时跳业务登录页，登录后回 authorize 地址
+      clients:
+        app1:
+          client-secret: "app1-secret"
+          redirect-uris: [ "https://app1.example/cb" ]   # 精确匹配，防开放重定向
+          scopes: [ "profile" ]
+```
+
+流程：`GET /oauth2/authorize`（已登录签发授权码回跳；未登录跳 login-page）→
+`POST /oauth2/token`（`grant_type=authorization_code` 或 `refresh_token`，refresh 轮换）。
+
+**关键设计：签发的 access_token 就是 auth-kit 会话凭证**——第三方应用拿它直接访问你的
+受保护接口，现有拦截链/注解/权限校验零改动；device 维度为 `OAuth2:{clientId}`，
+管理端点可按应用查看/踢出在线令牌。授权码一次性消费（Redis GETDEL 原子防重放）。
+
+### 9.2 第三方登录（让别人给你发令牌）
+
+```yaml
+auth-kit:
+  oauth2:
+    client:
+      enabled: true
+      success-redirect: "/sso-done"   # 登录成功落地页（token 附在查询参数）
+      providers:
+        github:
+          client-id: xxx
+          client-secret: xxx
+          redirect-uri: "https://your-app/oauth2/callback/github"
+        wecom:
+          corp-id: "ww-xxx"
+          corp-secret: xxx
+          agent-id: "1000002"
+          redirect-uri: "https://your-app/oauth2/callback/wecom"
+```
+
+```java
+// 唯一必配的 Bean：第三方档案 → 本地 userId（查绑定表，可自动建号）
+@Bean
+public OAuth2UserBinder oauth2UserBinder() {
+    return profile -> userBindService.findUserId(profile.provider(), profile.openId());
+}
+```
+
+用户入口 `GET /oauth2/login/github` → 平台授权 → 回调 `/oauth2/callback/github`
+（state 防 CSRF + 单次消费）→ 绑定 → 签发本站会话。内置 GitHub 与企业微信；
+其他平台实现 `IdentityProvider`（authorizeUrl + exchange 两方法）注册 Bean 即接入。
+
+### 9.3 SSO（单点登录）
+
+多应用指向同一 Redis（相同 `session.key-prefix`）即共享会话；配合 9.1，把授权服务器
+部署在独立认证域名，各业务应用作为 9.2 的 client 接入，即完成"一次登录、处处通行"。
+任一应用登出/被踢，凭证全局失效；应用本地清理可监听 `AuthKitSessionEvent`
+（LOGOUT / KICKED_OUT / FORCED_LOGOUT / REPLACED）。
+
 ### 3.7 管理端点（现成 HTTP 接口，默认关闭）
 
 ```yaml

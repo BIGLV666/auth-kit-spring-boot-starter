@@ -166,6 +166,14 @@ JWT 模式初版 claims 只有 uid/dev/iat/exp，秒级时间戳下**同一秒�
 
 自校验（验签不读会话）换来的代价：无滑动续期、无实时活跃数据、登出/踢人必须依赖墓碑黑名单（否则凭证到期前一直有效）。收益：每请求 Redis 往返从 3 次降到 1 次。墓碑/索引统一作用于下发凭证（`TokenCodec.keyOf`），两种模式下踢人/顶号语义完全一致。
 
+### 6.12 OAuth2 的 access_token 就将会话凭证
+
+不做独立令牌体系：`/oauth2/token` 签发的 access_token 直接调用 `AuthManager.login(userId, "OAuth2:{clientId}#随机后缀")` 产生会话凭证。收益巨大：资源端校验、注解鉴权、权限体系、踢人、管理端点对 OAuth2 令牌**零改动全量生效**；device 维度按客户端区分，在线列表可按应用审计。OAuth2 只新增"授权码/刷新令牌"两个短时 KV（共用 `OAuth2KeyValueStore` SPI，授权码用 Redis GETDEL 原子单次消费防重放）。
+
+### 6.13 客户端 SPI 的边界
+
+`IdentityProvider` 只封装协议（跳转地址 + code 换档案），**用户归属归业务**（`OAuth2UserBinder`）——与"不带用户表"同一哲学。SSO 不单独实现：授权服务器（6.12）+ 客户端模式 + 共享 Redis 会话，三者组合即"一次登录处处通行"。
+
 ## 7. 并发与一致性说明
 
 - `checkLogin` 非原子（读-判-写三步）：两个并发请求都读到旧 lastActiveTime 并写回，影响仅限活跃时间精度（秒级），可接受。

@@ -44,6 +44,8 @@ public class AuthManager {
     private volatile PermissionProvider permissionProvider;
     private volatile SafeStore safeStore;
     private volatile TokenCodec tokenCodec = new OpaqueTokenCodec();
+    /** 可选的 Spring 事件发布器：登出/踢人/顶号时发布 AuthKitSessionEvent（SSO 本地清理用） */
+    private volatile java.util.function.Consumer<io.github.biglv666.authkit.event.AuthKitSessionEvent> eventListener;
 
     public AuthManager(SessionDao sessionDao, TokenGenerator tokenGenerator,
                        long timeoutMillis, long activeTimeoutMillis, int maxSessionsPerDevice) {
@@ -91,6 +93,22 @@ public class AuthManager {
     /** 注入按设备覆盖的会话上限 */
     public void setDeviceMaxSessions(Map<String, Integer> deviceMaxSessions) {
         this.deviceMaxSessions = deviceMaxSessions == null ? Map.of() : deviceMaxSessions;
+    }
+
+    /** 注册会话事件监听（自动装配接入 Spring 事件广播），可空 */
+    public void setEventListener(java.util.function.Consumer<io.github.biglv666.authkit.event.AuthKitSessionEvent> eventListener) {
+        this.eventListener = eventListener;
+    }
+
+    private void publishEvent(String userId, String credential, io.github.biglv666.authkit.event.AuthKitSessionEvent.Action action) {
+        java.util.function.Consumer<io.github.biglv666.authkit.event.AuthKitSessionEvent> listener = eventListener;
+        if (listener != null && userId != null) {
+            try {
+                listener.accept(new io.github.biglv666.authkit.event.AuthKitSessionEvent(userId, credential, action));
+            } catch (Exception ignored) {
+                // 监听器异常不得影响主流程
+            }
+        }
     }
 
     // ── 登录态管理 ──
@@ -173,6 +191,8 @@ public class AuthManager {
         int excess = sessions.size() - max + 1;
         for (int i = 0; i < excess; i++) {
             evictSession(sessions.get(i), NotLoginReason.BE_REPLACED);
+            publishEvent(sessions.get(i).getUserId(), sessions.get(i).getToken(),
+                    io.github.biglv666.authkit.event.AuthKitSessionEvent.Action.REPLACED);
         }
     }
 
@@ -213,12 +233,16 @@ public class AuthManager {
         if (codec.selfValidating()) {
             sessionDao.markKicked(codec.keyOf(credential), NotLoginReason.TOKEN_INVALID, timeoutMillis);
             sessionDao.removeFromUserIndex(extractUserIdQuietly(credential), extractDeviceQuietly(credential), credential);
+            publishEvent(extractUserIdQuietly(credential), credential,
+                    io.github.biglv666.authkit.event.AuthKitSessionEvent.Action.LOGOUT);
             return;
         }
         AuthSession session = sessionDao.getSession(credential);
         if (session != null) {
             sessionDao.deleteSession(credential);
             sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), credential);
+            publishEvent(session.getUserId(), credential,
+                    io.github.biglv666.authkit.event.AuthKitSessionEvent.Action.LOGOUT);
         }
     }
 
@@ -253,6 +277,11 @@ public class AuthManager {
             }
             session.setToken(credential);
             evictSession(session, reason);
+            io.github.biglv666.authkit.event.AuthKitSessionEvent.Action action =
+                    reason == NotLoginReason.KICKED_OUT
+                            ? io.github.biglv666.authkit.event.AuthKitSessionEvent.Action.KICKED_OUT
+                            : io.github.biglv666.authkit.event.AuthKitSessionEvent.Action.FORCED_LOGOUT;
+            publishEvent(session.getUserId(), credential, action);
         }
     }
 
@@ -506,6 +535,11 @@ public class AuthManager {
      */
     public boolean isLogin() {
         return AuthContext.getUserId() != null;
+    }
+
+    /** 普通会话的绝对有效期（毫秒），OAuth2 服务器签发令牌时用于 expires_in */
+    public long getTimeoutMillis() {
+        return timeoutMillis;
     }
 
     private String requireUserId() {
