@@ -7,9 +7,12 @@ import io.github.biglv666.authkit.core.TokenResolver;
 import io.github.biglv666.authkit.crypto.BCryptPasswordEncoderAdapter;
 import io.github.biglv666.authkit.dao.AttemptStore;
 import io.github.biglv666.authkit.dao.InMemoryAttemptStore;
+import io.github.biglv666.authkit.dao.InMemorySafeStore;
 import io.github.biglv666.authkit.dao.InMemorySessionDao;
 import io.github.biglv666.authkit.dao.RedisAttemptStore;
+import io.github.biglv666.authkit.dao.RedisSafeStore;
 import io.github.biglv666.authkit.dao.RedisSessionDao;
+import io.github.biglv666.authkit.dao.SafeStore;
 import io.github.biglv666.authkit.dao.SessionDao;
 import io.github.biglv666.authkit.guard.LoginAttemptGuard;
 import io.github.biglv666.authkit.interceptor.AuthInterceptor;
@@ -17,7 +20,10 @@ import io.github.biglv666.authkit.management.ManagementTokenFilter;
 import io.github.biglv666.authkit.management.OnlineSessionController;
 import io.github.biglv666.authkit.spi.PasswordEncoder;
 import io.github.biglv666.authkit.spi.PermissionProvider;
+import io.github.biglv666.authkit.token.JwtTokenCodec;
+import io.github.biglv666.authkit.token.OpaqueTokenCodec;
 import io.github.biglv666.authkit.token.RandomTokenGenerator;
+import io.github.biglv666.authkit.token.TokenCodec;
 import io.github.biglv666.authkit.token.TokenGenerator;
 import io.github.biglv666.authkit.webcommon.AuthKitDefaultExceptionHandler;
 import io.github.biglv666.authkit.webcommon.AuthKitWebCommonExceptionHandler;
@@ -103,6 +109,25 @@ public class AuthKitAutoConfiguration {
         return new InMemoryAttemptStore();
     }
 
+    /** 二级认证状态存储：选择逻辑同会话存储 */
+    @Bean
+    @ConditionalOnMissingBean(SafeStore.class)
+    public SafeStore safeStore(AuthKitProperties properties,
+                               ObjectProvider<RedisConnectionFactory> factoryProvider) {
+        String store = properties.getStore();
+        if ("memory".equals(store)) {
+            return new InMemorySafeStore();
+        }
+        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+        if (factory != null) {
+            return new RedisSafeStore(new StringRedisTemplate(factory), properties.getKeyPrefix());
+        }
+        if ("redis".equals(store)) {
+            throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
+        }
+        return new InMemorySafeStore();
+    }
+
     // ── 核心层 ──
 
     @Bean
@@ -116,16 +141,35 @@ public class AuthKitAutoConfiguration {
     }
 
     @Bean
+    @ConditionalOnMissingBean(TokenCodec.class)
+    public TokenCodec tokenCodec(AuthKitProperties properties) {
+        if ("jwt".equals(properties.getToken().getMode())) {
+            String secret = properties.getToken().getJwtSecret();
+            if (secret == null || secret.length() < 16) {
+                throw new IllegalStateException(
+                        "auth-kit.token.mode=jwt 时必须配置 auth-kit.token.jwt-secret（HS256 签名密钥，至少 16 字符）");
+            }
+            return new JwtTokenCodec(secret, properties.getTimeout().toMillis());
+        }
+        return new OpaqueTokenCodec();
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     public AuthManager authManager(SessionDao sessionDao, TokenGenerator tokenGenerator,
-                                   AuthKitProperties properties,
+                                   TokenCodec tokenCodec, SafeStore safeStore, AuthKitProperties properties,
                                    ObjectProvider<PermissionProvider> permissionProvider) {
         AuthManager manager = new AuthManager(
                 sessionDao,
                 tokenGenerator,
                 properties.getTimeout().toMillis(),
                 properties.getActiveTimeout().toMillis(),
-                properties.getMaxSessionsPerDevice());
+                properties.getMaxSessionsPerDevice(),
+                properties.getRememberTimeout().toMillis(),
+                properties.getSafe().getDuration().toMillis());
+        manager.setTokenCodec(tokenCodec);
+        manager.setDeviceMaxSessions(properties.getSession().getDeviceMaxSessions());
+        manager.setSafeStore(safeStore);
         PermissionProvider provider = permissionProvider.getIfAvailable();
         if (provider != null) {
             manager.setPermissionProvider(provider);

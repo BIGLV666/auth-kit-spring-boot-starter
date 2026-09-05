@@ -5,6 +5,7 @@ import io.github.biglv666.authkit.exception.NotLoginException;
 import io.github.biglv666.authkit.exception.NotLoginReason;
 import io.github.biglv666.authkit.exception.NotPermissionException;
 import io.github.biglv666.authkit.exception.NotRoleException;
+import io.github.biglv666.authkit.exception.NotSafeException;
 import io.github.biglv666.webcommon.result.Result;
 import io.github.biglv666.webcommon.result.ResultCode;
 import org.springframework.core.Ordered;
@@ -38,6 +39,12 @@ public class AuthKitWebCommonExceptionHandler {
     /** 无权限 → FORBIDDEN(40300) */
     @ExceptionHandler(NotPermissionException.class)
     public Result<Void> handleNotPermission(NotPermissionException e) {
+        return Result.fail(ResultCode.FORBIDDEN, e.getMessage());
+    }
+
+    /** 未通过二级认证 → FORBIDDEN(40300)，前端引导重新验密 */
+    @ExceptionHandler(NotSafeException.class)
+    public Result<Void> handleNotSafe(NotSafeException e) {
         return Result.fail(ResultCode.FORBIDDEN, e.getMessage());
     }
 

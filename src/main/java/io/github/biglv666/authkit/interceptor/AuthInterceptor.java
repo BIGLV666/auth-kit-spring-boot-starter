@@ -77,7 +77,7 @@ public class AuthInterceptor implements HandlerInterceptor {
         if (info.isRequireAuth() && session == null) {
             throw new NotLoginException(token == null ? NotLoginReason.NO_TOKEN : NotLoginReason.TOKEN_INVALID);
         }
-        // 权限/角色校验使用会话中的 userId（显式参数，不依赖 ThreadLocal）；
+        // 权限/角色/二级认证校验使用会话中的 userId（显式参数，不依赖 ThreadLocal）；
         // 全部通过后才填充上下文：若校验阶段抛异常，Spring 不会执行本拦截器的
         // afterCompletion，提前填充会在线程池中残留脏上下文（串号风险）
         if (session != null) {
@@ -95,6 +95,9 @@ public class AuthInterceptor implements HandlerInterceptor {
             }
             if (info.getMethodRole() != null) {
                 authManager.checkRoles(userId, info.getMethodRole().values(), info.getMethodRole().mode());
+            }
+            if (info.isRequireSafe()) {
+                authManager.checkSafe(userId);
             }
             AuthContext.set(userId, session.getDevice(), token);
         }
@@ -123,6 +126,10 @@ public class AuthInterceptor implements HandlerInterceptor {
         Class<?> beanType = handlerMethod.getBeanType();
         RequireLogin classLogin = beanType.getAnnotation(RequireLogin.class);
         RequireLogin methodLogin = handlerMethod.getMethodAnnotation(RequireLogin.class);
+        io.github.biglv666.authkit.annotation.RequireSafe classSafe =
+                beanType.getAnnotation(io.github.biglv666.authkit.annotation.RequireSafe.class);
+        io.github.biglv666.authkit.annotation.RequireSafe methodSafe =
+                handlerMethod.getMethodAnnotation(io.github.biglv666.authkit.annotation.RequireSafe.class);
         RequirePermission classPermission = beanType.getAnnotation(RequirePermission.class);
         RequirePermission methodPermission = handlerMethod.getMethodAnnotation(RequirePermission.class);
         RequireRole classRole = beanType.getAnnotation(RequireRole.class);
@@ -133,6 +140,8 @@ public class AuthInterceptor implements HandlerInterceptor {
                 ignore,
                 AuthAnnotationInfo.hasLogin(classLogin),
                 AuthAnnotationInfo.hasLogin(methodLogin),
+                AuthAnnotationInfo.hasSafe(classSafe),
+                AuthAnnotationInfo.hasSafe(methodSafe),
                 AuthAnnotationInfo.toRule(classPermission),
                 AuthAnnotationInfo.toRule(methodPermission),
                 AuthAnnotationInfo.toRule(classRole),

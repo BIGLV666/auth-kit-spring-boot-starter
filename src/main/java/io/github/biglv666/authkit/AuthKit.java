@@ -61,6 +61,36 @@ public final class AuthKit {
         return requireManager().login(userId, device);
     }
 
+    /** 登录并签发 token，指定设备与记住我（记住我会话使用 remember-timeout 长效期） */
+    public static String login(Object userId, DeviceType deviceType, boolean rememberMe) {
+        return requireManager().login(userId, deviceType.getName(), rememberMe);
+    }
+
+    /** 登录并签发 token，自定义设备标识与记住我 */
+    public static String login(Object userId, String device, boolean rememberMe) {
+        return requireManager().login(userId, device, rememberMe);
+    }
+
+    // ── 二级认证 ──
+
+    /**
+     * 开启当前用户的安全态：业务方自行验密成功后调用，
+     * 之后 safe-duration 内 @RequireSafe 端点免二次验证。
+     */
+    public static void openSafe() {
+        requireManager().openSafe();
+    }
+
+    /** 当前用户是否在二级认证有效期内 */
+    public static boolean isSafe() {
+        return requireManager().isSafe();
+    }
+
+    /** 关闭当前用户的安全态（敏感操作完成即失效） */
+    public static void closeSafe() {
+        requireManager().closeSafe();
+    }
+
     /** 登出当前请求的登录态 */
     public static void logout() {
         requireManager().logout();

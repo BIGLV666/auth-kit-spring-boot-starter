@@ -38,12 +38,13 @@ public class RedisSessionDao implements SessionDao {
     @Override
     public void saveSession(AuthSession session, long timeoutMillis) {
         String key = prefix + TOKEN_KEY + session.getToken();
-        Map<String, String> fields = new HashMap<>(5);
+        Map<String, String> fields = new HashMap<>(6);
         fields.put("token", session.getToken());
         fields.put("userId", session.getUserId());
         fields.put("device", session.getDevice());
         fields.put("loginTime", String.valueOf(session.getLoginTime()));
         fields.put("lastActiveTime", String.valueOf(session.getLastActiveTime()));
+        fields.put("rememberMe", String.valueOf(session.isRememberMe()));
         redis.opsForHash().putAll(key, fields);
         redis.expire(key, java.time.Duration.ofMillis(timeoutMillis));
     }
@@ -60,6 +61,8 @@ public class RedisSessionDao implements SessionDao {
         session.setDevice((String) fields.get("device"));
         session.setLoginTime(Long.parseLong((String) fields.get("loginTime")));
         session.setLastActiveTime(Long.parseLong((String) fields.get("lastActiveTime")));
+        Object remember = fields.get("rememberMe");
+        session.setRememberMe(remember != null && Boolean.parseBoolean((String) remember));
         return session;
     }
 

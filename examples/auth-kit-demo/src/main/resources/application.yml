@@ -1,0 +1,13 @@
+server:
+  port: 8081
+
+auth-kit:
+  token:
+    timeout: 2h          # 演示用短会话
+    active-timeout: 30m
+    remember-timeout: 7d # 登录时带 rememberMe 的会话用这个时长
+  session:
+    max-sessions-per-device: 1
+  whitelist:
+    - /login
+    - /feed

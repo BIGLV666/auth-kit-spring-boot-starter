@@ -1,5 +1,6 @@
 package io.github.biglv666.authkit.core;
 
+import io.github.biglv666.authkit.dao.InMemorySafeStore;
 import io.github.biglv666.authkit.dao.InMemorySessionDao;
 import io.github.biglv666.authkit.dao.SessionDao;
 import io.github.biglv666.authkit.exception.LoginLockedException;
@@ -7,6 +8,7 @@ import io.github.biglv666.authkit.exception.NotLoginException;
 import io.github.biglv666.authkit.exception.NotLoginReason;
 import io.github.biglv666.authkit.exception.NotPermissionException;
 import io.github.biglv666.authkit.exception.NotRoleException;
+import io.github.biglv666.authkit.exception.NotSafeException;
 import io.github.biglv666.authkit.model.AuthMode;
 import io.github.biglv666.authkit.spi.PermissionProvider;
 import io.github.biglv666.authkit.token.RandomTokenGenerator;
@@ -31,11 +33,13 @@ class AuthManagerTest {
 
     private final AtomicLong now = new AtomicLong(1_000_000);
     private final InMemorySessionDao dao = new InMemorySessionDao(now::get);
+    /** 记住我 100s、二级认证窗口 60s 的管理器 */
     private final AuthManager manager = new AuthManager(
-            dao, new RandomTokenGenerator(32), 30_000, 7_000, 1, now::get);
+            dao, new RandomTokenGenerator(32), 30_000, 7_000, 1, 100_000, 60_000, now::get);
 
     @BeforeEach
     void setUp() {
+        manager.setSafeStore(new InMemorySafeStore(now::get));
         manager.setPermissionProvider(new PermissionProvider() {
             @Override
             public Set<String> getPermissions(String userId) {
@@ -130,7 +134,7 @@ class AuthManagerTest {
 
     @Test
     void maxSessionsTwoKeepsNewest() {
-        AuthManager multi = new AuthManager(dao, new RandomTokenGenerator(32), 30_000, 0, 2, now::get);
+        AuthManager multi = new AuthManager(dao, new RandomTokenGenerator(32), 30_000, 0, 2, 30_000, 0, now::get);
         String t1 = multi.login(10001, "APP");
         now.addAndGet(1);
         String t2 = multi.login(10001, "APP");
@@ -143,7 +147,7 @@ class AuthManagerTest {
 
     @Test
     void unlimitedSessionsWhenNegative() {
-        AuthManager unlimited = new AuthManager(dao, new RandomTokenGenerator(32), 30_000, 0, -1, now::get);
+        AuthManager unlimited = new AuthManager(dao, new RandomTokenGenerator(32), 30_000, 0, -1, 30_000, 0, now::get);
         String t1 = unlimited.login(10001, "APP");
         String t2 = unlimited.login(10001, "APP");
         unlimited.checkLogin(t1);
@@ -197,5 +201,46 @@ class AuthManagerTest {
         } catch (NotLoginException e) {
             return e.getReason();
         }
+    }
+
+    // ── 记住我 ──
+
+    @Test
+    void rememberMeSessionLivesLonger() {
+        String normal = manager.login(10001, "APP");
+        String remember = manager.login(10001, "PC", true);
+        // 每 6s 活跃一次（< 7s 活跃超时），持续到 30s（普通会话绝对到期点）
+        for (int i = 0; i < 5; i++) {
+            now.addAndGet(6_000);
+            manager.checkLogin(remember);
+        }
+        now.addAndGet(6_000);
+        assertEquals(NotLoginReason.TOKEN_INVALID, reasonOf(normal), "普通会话 30s 绝对到期");
+        assertEquals("10001", manager.checkLogin(remember).getUserId(), "记住我会话 100s 内仍有效");
+        assertTrue(manager.checkLogin(remember).isRememberMe());
+    }
+
+    // ── 二级认证 ──
+
+    @Test
+    void safeFlowOpensChecksAndCloses() {
+        String token = manager.login(10001, "APP");
+        AuthContext.set("10001", "APP", token);
+        org.junit.jupiter.api.Assertions.assertFalse(manager.isSafe());
+        assertThrows(NotSafeException.class, () -> manager.checkSafe("10001"));
+        manager.openSafe();
+        org.junit.jupiter.api.Assertions.assertTrue(manager.isSafe());
+        manager.checkSafe("10001");
+        manager.closeSafe();
+        org.junit.jupiter.api.Assertions.assertFalse(manager.isSafe());
+    }
+
+    @Test
+    void safeExpiresAfterDuration() {
+        String token = manager.login(10001, "APP");
+        AuthContext.set("10001", "APP", token);
+        manager.openSafe();
+        now.addAndGet(60_001);
+        org.junit.jupiter.api.Assertions.assertFalse(manager.isSafe(), "安全态应随窗口过期");
     }
 }

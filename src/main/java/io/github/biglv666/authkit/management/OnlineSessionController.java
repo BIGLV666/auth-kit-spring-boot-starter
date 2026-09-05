@@ -5,6 +5,7 @@ import io.github.biglv666.authkit.model.AuthSession;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,7 +43,7 @@ public class OnlineSessionController {
     }
 
     /**
-     * 强制指定用户下线（可选设备维度）。
+     * 强制指定用户下线（可选设备维度），不写墓碑（旧端收到 TOKEN_INVALID 语义）。
      *
      * @param userId 用户标识
      * @param device 设备标识（可选，null 表示全部设备）
@@ -51,6 +52,16 @@ public class OnlineSessionController {
     public Map<String, Object> forceLogout(@PathVariable("userId") String userId,
                                            @RequestParam(value = "device", required = false) String device) {
         authManager.forceLogout(userId, device);
+        return Map.of("success", true, "userId", userId);
+    }
+
+    /**
+     * 踢指定用户下线（可选设备维度），写墓碑（旧端收到「已被强制下线」专用语义）。
+     */
+    @PostMapping("/online/{userId}/kick")
+    public Map<String, Object> kickout(@PathVariable("userId") String userId,
+                                       @RequestParam(value = "device", required = false) String device) {
+        authManager.kickout(userId, device);
         return Map.of("success", true, "userId", userId);
     }
 

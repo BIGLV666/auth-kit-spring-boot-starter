@@ -6,6 +6,7 @@ import io.github.biglv666.authkit.annotation.CurrentUser;
 import io.github.biglv666.authkit.annotation.RequireLogin;
 import io.github.biglv666.authkit.annotation.RequirePermission;
 import io.github.biglv666.authkit.annotation.RequireRole;
+import io.github.biglv666.authkit.annotation.RequireSafe;
 import io.github.biglv666.authkit.model.AuthMode;
 import io.github.biglv666.authkit.model.AuthUser;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -26,6 +27,21 @@ public class TestController {
     public Map<String, String> login(@RequestParam("userId") String userId,
                                      @RequestParam(value = "device", defaultValue = "APP") String device) {
         return Map.of("token", AuthKit.login(userId, device));
+    }
+
+    /** 开启二级认证（真实业务应先验密再调用；此处直开以便测试） */
+    @PostMapping("/safe/open")
+    @RequireLogin
+    public String openSafe() {
+        AuthKit.openSafe();
+        return "ok";
+    }
+
+    /** 敏感操作示例：要求二级认证 */
+    @PostMapping("/safe/change-password")
+    @RequireSafe
+    public String changePassword() {
+        return "ok";
     }
 
     /** 无任何注解：软解析路径，带有效 token 时 @CurrentUser 可用，不带也放行 */

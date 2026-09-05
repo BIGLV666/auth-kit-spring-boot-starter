@@ -21,16 +21,21 @@ public class AuthAnnotationInfo {
     private final boolean ignore;
     private final boolean classRequireLogin;
     private final boolean methodRequireLogin;
+    private final boolean classRequireSafe;
+    private final boolean methodRequireSafe;
     private final Rule classPermission;
     private final Rule methodPermission;
     private final Rule classRole;
     private final Rule methodRole;
 
     public AuthAnnotationInfo(boolean ignore, boolean classRequireLogin, boolean methodRequireLogin,
+                              boolean classRequireSafe, boolean methodRequireSafe,
                               Rule classPermission, Rule methodPermission, Rule classRole, Rule methodRole) {
         this.ignore = ignore;
         this.classRequireLogin = classRequireLogin;
         this.methodRequireLogin = methodRequireLogin;
+        this.classRequireSafe = classRequireSafe;
+        this.methodRequireSafe = methodRequireSafe;
         this.classPermission = classPermission;
         this.methodPermission = methodPermission;
         this.classRole = classRole;
@@ -42,11 +47,16 @@ public class AuthAnnotationInfo {
         return ignore;
     }
 
-    /** 是否需要执行登录校验（显式注解或任何权限/角色规则隐含） */
+    /** 是否需要执行登录校验（显式注解或任何权限/角色/安全规则隐含） */
     public boolean isRequireAuth() {
-        return classRequireLogin || methodRequireLogin
+        return classRequireLogin || methodRequireLogin || classRequireSafe || methodRequireSafe
                 || classPermission != null || methodPermission != null
                 || classRole != null || methodRole != null;
+    }
+
+    /** 是否要求二级认证（类级或方法级） */
+    public boolean isRequireSafe() {
+        return classRequireSafe || methodRequireSafe;
     }
 
     public Rule getClassPermission() {
@@ -81,6 +91,10 @@ public class AuthAnnotationInfo {
     }
 
     static boolean hasLogin(RequireLogin annotation) {
+        return annotation != null;
+    }
+
+    static boolean hasSafe(io.github.biglv666.authkit.annotation.RequireSafe annotation) {
         return annotation != null;
     }
 

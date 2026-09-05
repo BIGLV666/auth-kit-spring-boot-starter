@@ -4,6 +4,7 @@ import io.github.biglv666.authkit.exception.LoginLockedException;
 import io.github.biglv666.authkit.exception.NotLoginException;
 import io.github.biglv666.authkit.exception.NotPermissionException;
 import io.github.biglv666.authkit.exception.NotRoleException;
+import io.github.biglv666.authkit.exception.NotSafeException;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
@@ -29,8 +30,8 @@ public class AuthKitDefaultExceptionHandler {
         return build(HttpStatus.UNAUTHORIZED, 401, e.getMessage());
     }
 
-    /** 无权限/缺角色 → 403 */
-    @ExceptionHandler({NotPermissionException.class, NotRoleException.class})
+    /** 无权限/缺角色/未通过二级认证 → 403 */
+    @ExceptionHandler({NotPermissionException.class, NotRoleException.class, NotSafeException.class})
     public ResponseEntity<Map<String, Object>> handleForbidden(RuntimeException e) {
         return build(HttpStatus.FORBIDDEN, 403, e.getMessage());
     }

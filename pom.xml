@@ -13,7 +13,7 @@
 
     <groupId>io.github.biglv666</groupId>
     <artifactId>auth-kit-spring-boot-starter</artifactId>
-    <version>0.1.0</version>
+    <version>1.0.0</version>
     <name>auth-kit-spring-boot-starter</name>
     <description>轻量级认证鉴权组件：不透明 token + 有状态会话，支持踢人下线、同端互斥、滑动续期，不带用户表</description>
 

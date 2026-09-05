@@ -17,6 +17,8 @@ public class AuthSession {
     private long loginTime;
     /** 最后活跃时间戳（毫秒），用于滑动续期与活跃超时判定 */
     private long lastActiveTime;
+    /** 是否记住我（长效会话） */
+    private boolean rememberMe;
 
     public AuthSession() {
     }
@@ -59,6 +61,14 @@ public class AuthSession {
 
     public void setLoginTime(long loginTime) {
         this.loginTime = loginTime;
+    }
+
+    public boolean isRememberMe() {
+        return rememberMe;
+    }
+
+    public void setRememberMe(boolean rememberMe) {
+        this.rememberMe = rememberMe;
     }
 
     public long getLastActiveTime() {

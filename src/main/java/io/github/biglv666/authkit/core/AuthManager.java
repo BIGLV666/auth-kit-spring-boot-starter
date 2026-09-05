@@ -1,27 +1,32 @@
 package io.github.biglv666.authkit.core;
 
+import io.github.biglv666.authkit.dao.SafeStore;
 import io.github.biglv666.authkit.model.AuthMode;
 import io.github.biglv666.authkit.exception.NotLoginException;
 import io.github.biglv666.authkit.exception.NotLoginReason;
 import io.github.biglv666.authkit.exception.NotPermissionException;
 import io.github.biglv666.authkit.exception.NotRoleException;
+import io.github.biglv666.authkit.exception.NotSafeException;
 import io.github.biglv666.authkit.model.AuthSession;
 import io.github.biglv666.authkit.model.DeviceType;
 import io.github.biglv666.authkit.spi.PermissionProvider;
+import io.github.biglv666.authkit.token.OpaqueTokenCodec;
+import io.github.biglv666.authkit.token.TokenCodec;
 import io.github.biglv666.authkit.token.TokenGenerator;
 import io.github.biglv666.authkit.dao.SessionDao;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.LongSupplier;
 
 /**
- * 认证核心逻辑：签发、校验、续期、踢人、顶号、权限/角色校验。
- * <p>无状态于请求上下文；请求相关操作（当前登录人等）依赖
- * {@link AuthContext} 由拦截器填充。时间源可注入，便于测试模拟时间推进。</p>
+ * 认证核心逻辑：签发、校验、续期、踢人、顶号、权限/角色校验、二级认证。
+ * <p>支持两种凭证模式（{@link TokenCodec}）：opaque（默认，会话读取校验，全功能）
+ * 与 jwt（自校验，验签 + 墓碑黑名单，无滑动续期）。时间源可注入，便于测试。</p>
  */
 public class AuthManager {
 
@@ -30,24 +35,41 @@ public class AuthManager {
     private final long timeoutMillis;
     private final long activeTimeoutMillis;
     private final int maxSessionsPerDevice;
+    private final long rememberTimeoutMillis;
+    private final long safeDurationMillis;
     private final LongSupplier clock;
+
+    /** 按设备覆盖的会话上限（key=设备标识），未命中用 maxSessionsPerDevice */
+    private volatile Map<String, Integer> deviceMaxSessions = Map.of();
     private volatile PermissionProvider permissionProvider;
+    private volatile SafeStore safeStore;
+    private volatile TokenCodec tokenCodec = new OpaqueTokenCodec();
 
     public AuthManager(SessionDao sessionDao, TokenGenerator tokenGenerator,
                        long timeoutMillis, long activeTimeoutMillis, int maxSessionsPerDevice) {
         this(sessionDao, tokenGenerator, timeoutMillis, activeTimeoutMillis, maxSessionsPerDevice,
-                System::currentTimeMillis);
+                timeoutMillis, 0, System::currentTimeMillis);
     }
 
-    /** 全参构造：时间源可注入，供测试模拟时间流逝 */
+    /** 含记住我与二级认证时长的构造（系统时钟） */
     public AuthManager(SessionDao sessionDao, TokenGenerator tokenGenerator,
                        long timeoutMillis, long activeTimeoutMillis, int maxSessionsPerDevice,
-                       LongSupplier clock) {
+                       long rememberTimeoutMillis, long safeDurationMillis) {
+        this(sessionDao, tokenGenerator, timeoutMillis, activeTimeoutMillis, maxSessionsPerDevice,
+                rememberTimeoutMillis, safeDurationMillis, System::currentTimeMillis);
+    }
+
+    /** 全参构造：时间源与各时长可注入，供测试模拟时间流逝 */
+    public AuthManager(SessionDao sessionDao, TokenGenerator tokenGenerator,
+                       long timeoutMillis, long activeTimeoutMillis, int maxSessionsPerDevice,
+                       long rememberTimeoutMillis, long safeDurationMillis, LongSupplier clock) {
         this.sessionDao = sessionDao;
         this.tokenGenerator = tokenGenerator;
         this.timeoutMillis = timeoutMillis;
         this.activeTimeoutMillis = activeTimeoutMillis;
         this.maxSessionsPerDevice = maxSessionsPerDevice;
+        this.rememberTimeoutMillis = rememberTimeoutMillis;
+        this.safeDurationMillis = safeDurationMillis;
         this.clock = clock;
     }
 
@@ -56,104 +78,152 @@ public class AuthManager {
         this.permissionProvider = permissionProvider;
     }
 
+    /** 注入二级认证状态存储 */
+    public void setSafeStore(SafeStore safeStore) {
+        this.safeStore = safeStore;
+    }
+
+    /** 注入凭证编解码（opaque / jwt） */
+    public void setTokenCodec(TokenCodec tokenCodec) {
+        this.tokenCodec = tokenCodec == null ? new OpaqueTokenCodec() : tokenCodec;
+    }
+
+    /** 注入按设备覆盖的会话上限 */
+    public void setDeviceMaxSessions(Map<String, Integer> deviceMaxSessions) {
+        this.deviceMaxSessions = deviceMaxSessions == null ? Map.of() : deviceMaxSessions;
+    }
+
     // ── 登录态管理 ──
 
     /**
-     * 登录并签发 token（默认设备 PC）。
+     * 登录并签发 token（默认设备 PC，非记住我）。
      *
-     * @param userId 用户标识
-     * @return 新签发的 token
+     * @return 下发给客户端的凭证
      */
     public String login(Object userId) {
-        return login(userId, DeviceType.PC.getName());
+        return login(userId, DeviceType.PC.getName(), false);
     }
 
     /**
-     * 登录并签发 token。
-     *
-     * @param userId     用户标识
-     * @param deviceType 内置设备类型
-     * @return 新签发的 token
+     * 登录并签发 token（非记住我）。
      */
     public String login(Object userId, DeviceType deviceType) {
-        return login(userId, deviceType.getName());
+        return login(userId, deviceType.getName(), false);
     }
 
     /**
-     * 登录并签发 token；同端会话数超上限时按"最旧优先"顶号下线（标记 BE_REPLACED）。
-     *
-     * @param userId 用户标识
-     * @param device 设备标识（自定义字符串）
-     * @return 新签发的 token
+     * 登录并签发 token（自定义设备，非记住我）。
      */
     public String login(Object userId, String device) {
-        String uid = String.valueOf(userId);
-        String token = tokenGenerator.generate();
-        long now = clock.getAsLong();
-        AuthSession session = new AuthSession(token, uid, device, now, now);
-        sessionDao.saveSession(session, timeoutMillis);
-        sessionDao.addToUserIndex(uid, device, token, now + timeoutMillis);
-        evictOverflowSessions(uid, device, token);
-        return token;
+        return login(userId, device, false);
     }
 
     /**
-     * 顶号超额会话：保留最新的 maxSessionsPerDevice 个旧会话（新 token 恒保留），
+     * 登录并签发 token，可指定记住我。
+     * <p>记住我会话使用 remember-timeout（长效），普通会话使用 timeout。</p>
+     *
+     * @return 下发给客户端的凭证（opaque 模式即随机 token，jwt 模式为签名 JWT）
+     */
+    public String login(Object userId, String device, boolean rememberMe) {
+        String uid = String.valueOf(userId);
+        String randomToken = tokenGenerator.generate();
+        long now = clock.getAsLong();
+        long ttl = rememberMe ? rememberTimeoutMillis : timeoutMillis;
+        AuthSession session = new AuthSession(randomToken, uid, device, now, now);
+        session.setRememberMe(rememberMe);
+        sessionDao.saveSession(session, ttl);
+
+        TokenCodec codec = tokenCodec;
+        String credential = codec.issue(session, randomToken);
+        // 索引与墓碑作用于"下发的凭证"，保证踢人/顶号在两种凭证模式下语义一致
+        sessionDao.addToUserIndex(uid, device, credential, now + ttl);
+        evictOverflowSessions(uid, device, credential);
+        return credential;
+    }
+
+    /**
+     * 顶号超额会话：保留最新的 maxSessionsPerDevice 个旧会话（新凭证恒保留），
      * 超额的按登录时间从旧到新标记"被顶下线"。
      */
-    private void evictOverflowSessions(String userId, String device, String currentToken) {
-        if (maxSessionsPerDevice < 0) {
+    private void evictOverflowSessions(String userId, String device, String currentCredential) {
+        int max = maxSessionsFor(device);
+        if (max < 0) {
             return;
         }
+        TokenCodec codec = tokenCodec;
         List<AuthSession> sessions = new ArrayList<>();
-        for (String token : sessionDao.getUserTokens(userId, device)) {
-            if (token.equals(currentToken)) {
+        for (String credential : sessionDao.getUserTokens(userId, device)) {
+            if (credential.equals(currentCredential)) {
                 continue;
             }
-            AuthSession session = sessionDao.getSession(token);
+            AuthSession session = codec.selfValidating()
+                    ? codec.describe(credential)
+                    : sessionDao.getSession(credential);
             if (session != null) {
                 sessions.add(session);
             } else {
                 // 清理索引中的脏条目
-                sessionDao.removeFromUserIndex(userId, device, token);
+                sessionDao.removeFromUserIndex(userId, device, credential);
             }
         }
-        if (sessions.size() < maxSessionsPerDevice) {
+        if (sessions.size() < max) {
             return;
         }
         sessions.sort(Comparator.comparingLong(AuthSession::getLoginTime));
-        int excess = sessions.size() - maxSessionsPerDevice + 1;
+        int excess = sessions.size() - max + 1;
         for (int i = 0; i < excess; i++) {
-            AuthSession oldest = sessions.get(i);
-            sessionDao.deleteSession(oldest.getToken());
-            sessionDao.markKicked(oldest.getToken(), NotLoginReason.BE_REPLACED, timeoutMillis);
-            sessionDao.removeFromUserIndex(oldest.getUserId(), oldest.getDevice(), oldest.getToken());
+            evictSession(sessions.get(i), NotLoginReason.BE_REPLACED);
         }
     }
 
+    /** 会话上限：按设备覆盖优先，其次全局值 */
+    private int maxSessionsFor(String device) {
+        Integer override = deviceMaxSessions.get(device);
+        return override != null ? override : maxSessionsPerDevice;
+    }
+
+    /** 驱逐一个会话：删会话（opaque）/ 写墓碑（统一）+ 清索引；reason 为 BE_REPLACED 或 KICKED_OUT，null=纯失效 */
+    private void evictSession(AuthSession session, NotLoginReason reason) {
+        TokenCodec codec = tokenCodec;
+        String credential = session.getToken();
+        if (!codec.selfValidating()) {
+            sessionDao.deleteSession(credential);
+        }
+        if (reason != null) {
+            sessionDao.markKicked(codec.keyOf(credential), reason, timeoutMillis);
+        }
+        sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), credential);
+    }
+
     /**
-     * 登出当前请求的登录态（token 从 {@link AuthContext} 获取），幂等。
+     * 登出当前请求的登录态（凭证从 {@link AuthContext} 获取），幂等。
      */
     public void logout() {
-        String token = AuthContext.getToken();
-        if (token != null) {
-            logout(token);
+        String credential = AuthContext.getToken();
+        if (credential != null) {
+            logout(credential);
         }
     }
 
     /**
-     * 登出指定 token（正常登出，不写墓碑），幂等。
+     * 登出指定凭证，幂等。JWT 模式下写 TOKEN_INVALID 墓碑（否则凭证在到期前仍有效）。
      */
-    public void logout(String token) {
-        AuthSession session = sessionDao.getSession(token);
+    public void logout(String credential) {
+        TokenCodec codec = tokenCodec;
+        if (codec.selfValidating()) {
+            sessionDao.markKicked(codec.keyOf(credential), NotLoginReason.TOKEN_INVALID, timeoutMillis);
+            sessionDao.removeFromUserIndex(extractUserIdQuietly(credential), extractDeviceQuietly(credential), credential);
+            return;
+        }
+        AuthSession session = sessionDao.getSession(credential);
         if (session != null) {
-            sessionDao.deleteSession(token);
-            sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), token);
+            sessionDao.deleteSession(credential);
+            sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), credential);
         }
     }
 
     /**
-     * 踢人下线：按用户（可选设备）删除其全部会话，并写墓碑使旧端收到 KICKED_OUT 语义。幂等。
+     * 踢人下线：按用户（可选设备）使其全部凭证失效，并写墓碑使旧端收到 KICKED_OUT 语义。幂等。
      *
      * @param device 设备标识；null 表示全部设备
      */
@@ -162,7 +232,7 @@ public class AuthManager {
     }
 
     /**
-     * 强制下线（管理端使用）：删除会话但不写墓碑，旧端收到 TOKEN_INVALID 语义。幂等。
+     * 强制下线（管理端使用）：不写 KICKED_OUT 墓碑，旧端收到 TOKEN_INVALID 语义。幂等。
      *
      * @param device 设备标识；null 表示全部设备
      */
@@ -172,18 +242,17 @@ public class AuthManager {
 
     private void kickOrLogout(Object userId, String device, NotLoginReason reason) {
         String uid = String.valueOf(userId);
-        for (String token : sessionDao.getUserTokens(uid, device)) {
-            AuthSession session = sessionDao.getSession(token);
+        for (String credential : sessionDao.getUserTokens(uid, device)) {
+            AuthSession session = tokenCodec.selfValidating()
+                    ? tokenCodec.describe(credential)
+                    : sessionDao.getSession(credential);
             if (session == null) {
                 // 清理索引脏条目
-                sessionDao.removeFromUserIndex(uid, device, token);
+                sessionDao.removeFromUserIndex(uid, device, credential);
                 continue;
             }
-            sessionDao.deleteSession(token);
-            if (reason != null) {
-                sessionDao.markKicked(token, reason, timeoutMillis);
-            }
-            sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), token);
+            session.setToken(credential);
+            evictSession(session, reason);
         }
     }
 
@@ -195,9 +264,12 @@ public class AuthManager {
     public List<AuthSession> listSessions(Object userId, String device) {
         String uid = String.valueOf(userId);
         List<AuthSession> result = new ArrayList<>();
-        for (String token : sessionDao.getUserTokens(uid, device)) {
-            AuthSession session = sessionDao.getSession(token);
+        for (String credential : sessionDao.getUserTokens(uid, device)) {
+            AuthSession session = tokenCodec.selfValidating()
+                    ? tokenCodec.describe(credential)
+                    : sessionDao.getSession(credential);
             if (session != null) {
+                session.setToken(credential);
                 result.add(session);
             }
         }
@@ -207,41 +279,110 @@ public class AuthManager {
     // ── 校验 ──
 
     /**
-     * 校验并滑动续期指定 token。
-     * <p>校验链：token 存在 → 未超活跃超时 → 更新最后活跃时间并重设 TTL。
-     * 任一环节失败抛出带原因的 {@link NotLoginException}。</p>
+     * 校验指定凭证。
+     * <p>opaque 模式：会话存在 → 未超活跃超时 → 推进活跃时间（滑动续期，不延长绝对有效期）。
+     * jwt 模式：本地验签 + exp + 墓碑黑名单，不读会话、无滑动续期。</p>
      *
-     * @return 校验通过后的会话数据
+     * @return 校验通过后的会话数据（jwt 模式为凭证 claims 的轻量映射）
      */
-    public AuthSession checkLogin(String token) {
-        if (token == null || token.isBlank()) {
+    public AuthSession checkLogin(String credential) {
+        if (credential == null || credential.isBlank()) {
             throw new NotLoginException(NotLoginReason.NO_TOKEN);
         }
-        AuthSession session = sessionDao.getSession(token);
+        TokenCodec codec = tokenCodec;
+        if (codec.selfValidating()) {
+            codec.verify(credential);
+            NotLoginReason kickReason = sessionDao.getKickReason(codec.keyOf(credential));
+            if (kickReason != null) {
+                throw new NotLoginException(kickReason);
+            }
+            AuthSession session = codec.describe(credential);
+            if (session == null) {
+                throw new NotLoginException(NotLoginReason.TOKEN_INVALID);
+            }
+            return session;
+        }
+        AuthSession session = sessionDao.getSession(credential);
         if (session == null) {
             // 会话不存在：优先查墓碑，区分"被踢/被顶"与普通失效
-            NotLoginReason kickReason = sessionDao.getKickReason(token);
+            NotLoginReason kickReason = sessionDao.getKickReason(credential);
             throw new NotLoginException(kickReason != null ? kickReason : NotLoginReason.TOKEN_INVALID);
         }
         long now = clock.getAsLong();
         if (activeTimeoutMillis > 0 && now - session.getLastActiveTime() > activeTimeoutMillis) {
             // 长期不活跃：主动清除会话与索引
-            sessionDao.deleteSession(token);
-            sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), token);
+            sessionDao.deleteSession(credential);
+            sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), credential);
             throw new NotLoginException(NotLoginReason.TOKEN_TIMEOUT);
         }
         // 滑动续期：仅推进活跃时间（绝对有效期在登录时一次确定，不随请求延长）
         session.setLastActiveTime(now);
-        sessionDao.updateLastActiveTime(token, now);
+        sessionDao.updateLastActiveTime(credential, now);
         return session;
     }
 
     /**
-     * 校验当前请求上下文的登录态（token 从 {@link AuthContext} 获取）。
+     * 校验当前请求上下文的登录态（凭证从 {@link AuthContext} 获取）。
      */
     public AuthSession checkLogin() {
         return checkLogin(AuthContext.getToken());
     }
+
+    // ── 二级认证 ──
+
+    /**
+     * 开启当前用户的安全态：业务方自行验密成功后调用，
+     * 之后 safe-duration 内 @RequireSafe 端点放行。
+     *
+     * @throws NotLoginException 未登录
+     */
+    public void openSafe() {
+        SafeStore store = requireSafeStore();
+        store.mark(requireUserId(), safeDurationMillis);
+    }
+
+    /**
+     * 判断当前用户是否在安全态内。
+     */
+    public boolean isSafe() {
+        String userId = AuthContext.getUserId();
+        SafeStore store = safeStore;
+        return userId != null && store != null && store.exists(userId);
+    }
+
+    /**
+     * 判断指定用户是否在安全态内（拦截器使用，不依赖 ThreadLocal）。
+     */
+    public boolean isSafe(String userId) {
+        SafeStore store = safeStore;
+        return store != null && store.exists(userId);
+    }
+
+    /** 关闭当前用户的安全态（如敏感操作完成即失效），幂等 */
+    public void closeSafe() {
+        String userId = AuthContext.getUserId();
+        SafeStore store = safeStore;
+        if (userId != null && store != null) {
+            store.clear(userId);
+        }
+    }
+
+    /** 校验指定用户的二级认证状态，未通过抛 NotSafeException（拦截器使用） */
+    public void checkSafe(String userId) {
+        if (!isSafe(userId)) {
+            throw new NotSafeException();
+        }
+    }
+
+    private SafeStore requireSafeStore() {
+        SafeStore store = safeStore;
+        if (store == null) {
+            throw new IllegalStateException("SafeStore 未装配");
+        }
+        return store;
+    }
+
+    // ── 权限/角色校验 ──
 
     /**
      * 校验当前用户是否拥有指定权限（单个）。
@@ -361,7 +502,7 @@ public class AuthManager {
     }
 
     /**
-     * 判断当前请求是否已登录（基于 ThreadLocal 上下文，不做 Redis 校验）。
+     * 判断当前请求是否已登录（基于 ThreadLocal 上下文，不做存储层校验）。
      */
     public boolean isLogin() {
         return AuthContext.getUserId() != null;
@@ -390,5 +531,15 @@ public class AuthManager {
             throw new NotRoleException("(未配置 PermissionProvider)");
         }
         return Objects.requireNonNullElse(provider.getRoles(userId), Set.of());
+    }
+
+    private String extractUserIdQuietly(String credential) {
+        AuthSession session = tokenCodec.describe(credential);
+        return session == null ? null : session.getUserId();
+    }
+
+    private String extractDeviceQuietly(String credential) {
+        AuthSession session = tokenCodec.describe(credential);
+        return session == null ? null : session.getDevice();
     }
 }
