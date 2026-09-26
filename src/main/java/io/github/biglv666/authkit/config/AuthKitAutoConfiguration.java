@@ -259,8 +259,32 @@ public class AuthKitAutoConfiguration {
         public OAuth2AuthorizationServerController oauth2AuthorizationServerController(
                 OAuth2Properties oauth2Properties, OAuth2KeyValueStore oauth2KeyValueStore,
                 AuthManager authManager, TokenResolver tokenResolver) {
+            validateServerClients(oauth2Properties);
             return new OAuth2AuthorizationServerController(oauth2Properties, oauth2KeyValueStore,
                     authManager, tokenResolver);
+        }
+
+        /**
+         * fail-fast：启用授权服务器却未正确注册客户端，问题必须暴露在启动期，
+         * 而不是等到第一次授权请求静默返回 invalid_client（对齐 6.8 管理端 fail-fast 惯例）。
+         */
+        private static void validateServerClients(OAuth2Properties oauth2Properties) {
+            java.util.Map<String, OAuth2Properties.ClientRegistration> clients = oauth2Properties.getServer().getClients();
+            if (clients == null || clients.isEmpty()) {
+                throw new IllegalStateException(
+                        "启用 auth-kit.oauth2.server 必须注册至少一个客户端（auth-kit.oauth2.server.clients.*）");
+            }
+            for (java.util.Map.Entry<String, OAuth2Properties.ClientRegistration> entry : clients.entrySet()) {
+                OAuth2Properties.ClientRegistration client = entry.getValue();
+                if (client.getClientSecret() == null || client.getClientSecret().isBlank()) {
+                    throw new IllegalStateException(
+                            "OAuth2 客户端 " + entry.getKey() + " 缺少 client-secret（本服务器仅支持机密客户端）");
+                }
+                if (client.getRedirectUris() == null || client.getRedirectUris().isEmpty()) {
+                    throw new IllegalStateException(
+                            "OAuth2 客户端 " + entry.getKey() + " 至少配置一个 redirect-uris（精确匹配，防开放重定向）");
+                }
+            }
         }
     }
 
@@ -327,9 +351,9 @@ public class AuthKitAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean
-        public AuthInterceptor authInterceptor(AuthKitProperties properties, AuthManager authManager,
-                                               TokenResolver tokenResolver) {
-            return new AuthInterceptor(properties, authManager, tokenResolver);
+        public AuthInterceptor authInterceptor(AuthKitProperties properties, OAuth2Properties oauth2Properties,
+                                               AuthManager authManager, TokenResolver tokenResolver) {
+            return new AuthInterceptor(properties, oauth2Properties, authManager, tokenResolver);
         }
 
         @Bean

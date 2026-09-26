@@ -30,7 +30,9 @@
         </developer>
     </developers>
     <scm>
-        <url>https://github.com/biglv666/auth-kit-spring-boot-starter</url>
+        <url>https://github.com/BIGLV666/auth-kit-spring-boot-starter</url>
+        <connection>scm:git:https://github.com/BIGLV666/auth-kit-spring-boot-starter.git</connection>
+        <developerConnection>scm:git:git@github.com:BIGLV666/auth-kit-spring-boot-starter.git</developerConnection>
     </scm>
 
     <properties>
@@ -116,52 +118,8 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-javadoc-plugin</artifactId>
-                <version>3.6.3</version>
-                <configuration>
-                    <encoding>UTF-8</encoding>
-                    <charset>UTF-8</charset>
-                    <docencoding>UTF-8</docencoding>
-                    <doclint>none</doclint>
-                </configuration>
-                <executions>
-                    <execution>
-                        <id>attach-javadocs</id>
-                        <goals>
-                            <goal>jar</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-source-plugin</artifactId>
-                <version>3.3.0</version>
-                <executions>
-                    <execution>
-                        <id>attach-sources</id>
-                        <goals>
-                            <goal>jar-no-fork</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-gpg-plugin</artifactId>
-                <version>3.1.0</version>
-                <executions>
-                    <execution>
-                        <id>sign-artifacts</id>
-                        <phase>verify</phase>
-                        <goals>
-                            <goal>sign</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
+            <!-- Central 发布插件常驻：日常 deploy 未带 release profile 时也能走通，
+                 但缺 javadoc/source/签名会被 Portal 校验拒绝——正式发布请用 -Prelease -->
             <plugin>
                 <groupId>org.sonatype.central</groupId>
                 <artifactId>central-publishing-maven-plugin</artifactId>
@@ -171,27 +129,69 @@
                     <publishingServerId>central</publishingServerId>
                     <tokenAuth>true</tokenAuth>
                     <autoPublish>true</autoPublish>
-                    <waitUntil>published</waitUntil>
+                    <!-- validated：校验通过即返回，发布继续异步进行；
+                     published 会阻塞 deploy 直到 Central 完全上线（30 分钟级），CI 易超时 -->
+                    <waitUntil>validated</waitUntil>
                 </configuration>
             </plugin>
         </plugins>
     </build>
 
     <profiles>
-        <profile>
-            <id>dev</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <properties>
-                <gpg.skip>true</gpg.skip>
-            </properties>
-        </profile>
+        <!-- dev（默认）：仅编译与测试，不打 javadoc/source jar、不签名，日常构建零开销 -->
+        <!-- release：Maven Central 发布专用，附带三件套；用法 mvn deploy -Prelease -->
         <profile>
             <id>release</id>
-            <properties>
-                <gpg.skip>false</gpg.skip>
-            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.6.3</version>
+                        <configuration>
+                            <encoding>UTF-8</encoding>
+                            <charset>UTF-8</charset>
+                            <docencoding>UTF-8</docencoding>
+                            <doclint>none</doclint>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 </project>

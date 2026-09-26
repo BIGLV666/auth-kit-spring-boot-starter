@@ -20,7 +20,19 @@ public class GitHubIdentityProvider implements IdentityProvider {
     private final RestClient restClient;
 
     public GitHubIdentityProvider() {
-        this(RestClient.create());
+        this(defaultRestClient());
+    }
+
+    /**
+     * 默认 RestClient：带连接/读取超时。平台接口挂起时不能占死 servlet 线程
+     * （RestClient.create() 默认无超时，线程池可被拖垮）。
+     */
+    private static RestClient defaultRestClient() {
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3_000);
+        factory.setReadTimeout(5_000);
+        return RestClient.builder().requestFactory(factory).build();
     }
 
     /** 注入 RestClient 便于测试桩替换 */

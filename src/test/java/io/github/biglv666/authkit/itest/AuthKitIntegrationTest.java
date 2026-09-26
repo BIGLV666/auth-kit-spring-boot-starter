@@ -77,6 +77,18 @@ class AuthKitIntegrationTest {
     }
 
     @Test
+    void businessPathContainingOauth2IsNotBypassed() throws Exception {
+        // 回归：路径含 /oauth2/ 片段的业务端点曾被内置白名单误放行（鉴权绕过），必须保持强校验
+        mockMvc.perform(get("/sso/oauth2/secret"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(40100));
+        String token = login("10001", "APP");
+        mockMvc.perform(get("/sso/oauth2/secret").header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(0));
+    }
+
+    @Test
     void permissionCheckedAgainstProvider() throws Exception {
         String token = login("10001", "APP");
         mockMvc.perform(get("/need/perm").header("Authorization", bearer(token)))

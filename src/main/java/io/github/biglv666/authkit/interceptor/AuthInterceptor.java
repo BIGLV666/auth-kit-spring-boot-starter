@@ -8,6 +8,7 @@ import io.github.biglv666.authkit.config.AuthKitProperties;
 import io.github.biglv666.authkit.core.AuthContext;
 import io.github.biglv666.authkit.core.AuthManager;
 import io.github.biglv666.authkit.core.TokenResolver;
+import io.github.biglv666.authkit.oauth2.OAuth2Properties;
 import io.github.biglv666.authkit.exception.NotLoginException;
 import io.github.biglv666.authkit.exception.NotLoginReason;
 import io.github.biglv666.authkit.model.AuthSession;
@@ -32,14 +33,17 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AuthInterceptor implements HandlerInterceptor {
 
     private final AuthKitProperties properties;
+    private final OAuth2Properties oauth2Properties;
     private final AuthManager authManager;
     private final TokenResolver tokenResolver;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
     /** 注解解析缓存：HandlerMethod 元数据不随请求变化，仅首次反射 */
     private final ConcurrentHashMap<HandlerMethod, AuthAnnotationInfo> annotationCache = new ConcurrentHashMap<>();
 
-    public AuthInterceptor(AuthKitProperties properties, AuthManager authManager, TokenResolver tokenResolver) {
+    public AuthInterceptor(AuthKitProperties properties, OAuth2Properties oauth2Properties,
+                           AuthManager authManager, TokenResolver tokenResolver) {
         this.properties = properties;
+        this.oauth2Properties = oauth2Properties;
         this.authManager = authManager;
         this.tokenResolver = tokenResolver;
     }
@@ -110,10 +114,10 @@ public class AuthInterceptor implements HandlerInterceptor {
         AuthContext.clear();
     }
 
-    /** 白名单匹配（Ant 风格）+ OAuth2 端点内置放行（authorize/token/login/callback 自管认证流程） */
+    /** 白名单匹配（Ant 风格）+ OAuth2 内置端点精确放行（authorize/token/login/callback 自管认证流程） */
     private boolean isWhitelisted(HttpServletRequest request) {
         String uri = request.getRequestURI();
-        if (uri.contains("/oauth2/")) {
+        if (isOAuth2Endpoint(stripContextPath(request))) {
             return true;
         }
         for (String pattern : properties.getWhitelist()) {
@@ -122,6 +126,32 @@ public class AuthInterceptor implements HandlerInterceptor {
             }
         }
         return false;
+    }
+
+    /**
+     * OAuth2 内置端点精确放行：仅放行真实注册的四个端点，且仅在对应功能启用时生效。
+     * <p>安全约束：绝不能用子串包含（如 {@code uri.contains("/oauth2/")}）判断——
+     * 业务路径碰巧含 {@code /oauth2/}（如 {@code /sso/oauth2/secret}）会被整体跳过鉴权，
+     * 形成静默的注解绕过。</p>
+     */
+    private boolean isOAuth2Endpoint(String path) {
+        if (oauth2Properties.getServer().isEnabled()
+                && (path.equals("/oauth2/authorize") || path.equals("/oauth2/token"))) {
+            return true;
+        }
+        // login/callback 带平台名路径变量，前缀即完整端点；不匹配任何更深路径
+        return oauth2Properties.getClient().isEnabled()
+                && (path.startsWith("/oauth2/login/") || path.startsWith("/oauth2/callback/"));
+    }
+
+    /** 剥离 context-path，得到应用内路径（OAuth2 控制器按应用内路径注册） */
+    private static String stripContextPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        if (contextPath == null || contextPath.isEmpty() || !uri.startsWith(contextPath)) {
+            return uri;
+        }
+        return uri.substring(contextPath.length());
     }
 
     /** 解析类级 + 方法级注解：类级与方法级规则独立保存（执行时取"与"关系） */

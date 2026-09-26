@@ -86,6 +86,16 @@ public class TestController {
         return user.getUserId() + ":" + user.getDevice();
     }
 
+    /**
+     * 回归用：业务路径碰巧包含 "/oauth2/" 片段。OAuth2 内置放行是精确端点匹配，
+     * 此端点绝不能被误放行——否则 @RequireLogin 形同虚设（历史缺陷，防回归）。
+     */
+    @GetMapping("/sso/oauth2/secret")
+    @RequireLogin
+    public String ssoOauth2Secret() {
+        return "ok";
+    }
+
     /** 白名单端点：完全无注解且路径在白名单中 */
     @GetMapping("/whitelisted/ping")
     public String ping() {

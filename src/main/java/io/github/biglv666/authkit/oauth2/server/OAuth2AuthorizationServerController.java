@@ -5,6 +5,7 @@ import io.github.biglv666.authkit.oauth2.OAuth2Properties;
 import io.github.biglv666.authkit.oauth2.store.OAuth2KeyValueStore;
 import io.github.biglv666.authkit.token.RandomTokenGenerator;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -68,7 +69,7 @@ public class OAuth2AuthorizationServerController {
                 }
             }
         }
-        // /oauth2/** 在拦截器白名单内，登录态需从请求头自行解析（带有效 token 即视为已登录）
+        // /oauth2/authorize|token 在拦截器白名单内（精确端点匹配），登录态需从请求头自行解析
         String userId = resolveUserId(request);
         if (userId == null) {
             String back = request.getRequestURL() + buildAuthorizeQuery(responseType, clientId, redirectUri, scope, state);
@@ -102,12 +103,12 @@ public class OAuth2AuthorizationServerController {
      * <p>access_token 即 auth-kit 会话凭证；refresh_token 轮换（旧的立即作废）。</p>
      */
     @PostMapping("/token")
-    public Map<String, Object> token(@RequestParam("grant_type") String grantType,
-                                     @RequestParam(value = "client_id", required = false) String clientId,
-                                     @RequestParam(value = "client_secret", required = false) String clientSecret,
-                                     @RequestParam(value = "code", required = false) String code,
-                                     @RequestParam(value = "redirect_uri", required = false) String redirectUri,
-                                     @RequestParam(value = "refresh_token", required = false) String refreshToken) {
+    public Object token(@RequestParam("grant_type") String grantType,
+                        @RequestParam(value = "client_id", required = false) String clientId,
+                        @RequestParam(value = "client_secret", required = false) String clientSecret,
+                        @RequestParam(value = "code", required = false) String code,
+                        @RequestParam(value = "redirect_uri", required = false) String redirectUri,
+                        @RequestParam(value = "refresh_token", required = false) String refreshToken) {
         if ("authorization_code".equals(grantType)) {
             return authorizationCodeGrant(clientId, clientSecret, code, redirectUri);
         }
@@ -117,8 +118,8 @@ public class OAuth2AuthorizationServerController {
         return oauthError("unsupported_grant_type", "仅支持 authorization_code / refresh_token");
     }
 
-    private Map<String, Object> authorizationCodeGrant(String clientId, String clientSecret,
-                                                       String code, String redirectUri) {
+    private Object authorizationCodeGrant(String clientId, String clientSecret,
+                                          String code, String redirectUri) {
         OAuth2Properties.ClientRegistration client = registeredClient(clientId);
         if (client == null || !constantEquals(client.getClientSecret(), clientSecret)) {
             return oauthError("invalid_client", "client_id 或 client_secret 错误");
@@ -132,13 +133,15 @@ public class OAuth2AuthorizationServerController {
             return oauthError("invalid_grant", "授权码无效或已使用");
         }
         String[] parts = decodeGrant(data);
-        if (!clientId.equals(parts[1]) || !redirectUri.equals(parts[2])) {
+        // RFC 6749 4.1.3：authorize 带 redirect_uri 时 token 请求必须原样带回；
+        // 客户端漏带（null）按不匹配处理，不得 NPE（之前直接 500）
+        if (!clientId.equals(parts[1]) || !java.util.Objects.equals(redirectUri, parts[2])) {
             return oauthError("invalid_grant", "授权码与 client_id/redirect_uri 不匹配");
         }
         return issueTokens(parts[0], clientId);
     }
 
-    private Map<String, Object> refreshTokenGrant(String clientId, String clientSecret, String refreshToken) {
+    private Object refreshTokenGrant(String clientId, String clientSecret, String refreshToken) {
         OAuth2Properties.ClientRegistration client = registeredClient(clientId);
         if (client == null || !constantEquals(client.getClientSecret(), clientSecret)) {
             return oauthError("invalid_client", "client_id 或 client_secret 错误");
@@ -195,12 +198,15 @@ public class OAuth2AuthorizationServerController {
         }
     }
 
-    /** OAuth2 标准错误结构（HTTP 400，不回显敏感细节） */
-    private static Map<String, Object> oauthError(String error, String description) {
+    /**
+     * OAuth2 标准错误结构：统一 HTTP 400（RFC 6749 5.2），
+     * 不回显密钥等敏感细节。消费者无响应包装时得到标准 {@code {error, error_description}} 结构。
+     */
+    private static ResponseEntity<Map<String, Object>> oauthError(String error, String description) {
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("error", error);
         resp.put("error_description", description);
-        return resp;
+        return ResponseEntity.badRequest().body(resp);
     }
 
     private String encodeGrant(String userId, String clientId, String redirectUri) {

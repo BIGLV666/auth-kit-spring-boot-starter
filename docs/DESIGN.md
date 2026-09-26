@@ -168,7 +168,7 @@ JWT 模式初版 claims 只有 uid/dev/iat/exp，秒级时间戳下**同一秒�
 
 ### 6.12 OAuth2 的 access_token 就将会话凭证
 
-不做独立令牌体系：`/oauth2/token` 签发的 access_token 直接调用 `AuthManager.login(userId, "OAuth2:{clientId}#随机后缀")` 产生会话凭证。收益巨大：资源端校验、注解鉴权、权限体系、踢人、管理端点对 OAuth2 令牌**零改动全量生效**；device 维度按客户端区分，在线列表可按应用审计。OAuth2 只新增"授权码/刷新令牌"两个短时 KV（共用 `OAuth2KeyValueStore` SPI，授权码用 Redis GETDEL 原子单次消费防重放）。
+不做独立令牌体系：`/oauth2/token` 签发的 access_token 直接调用 `AuthManager.login(userId, "OAuth2:{clientId}#随机后缀")` 产生会话凭证。收益巨大：资源端校验、注解鉴权、权限体系、踢人、管理端点对 OAuth2 令牌**零改动全量生效**；device 维度按客户端区分，在线列表可按应用审计。**随机后缀必不可少**：每个令牌独立会话，同客户端多令牌互不顶号（client 侧第三方登录同理为 `OAuth2:{provider}#随机后缀`）。OAuth2 只新增"授权码/刷新令牌"两个短时 KV（共用 `OAuth2KeyValueStore` SPI，授权码用 Redis GETDEL 原子单次消费防重放，需 Redis ≥ 6.2）。
 
 ### 6.13 客户端 SPI 的边界
 
@@ -190,3 +190,5 @@ JWT 模式初版 claims 只有 uid/dev/iat/exp，秒级时间戳下**同一秒�
 | `@Async` / 自建线程池 | ThreadLocal 不传递，需手动携带 AuthContext |
 | 权限数据变更 | 实时生效（无组件级缓存），但每次校验都查库，热路径需实现方自加缓存 |
 | token 明文存储 | 会话 key 即 token，Redis 被攻破即可用；如需更强可二开 SessionDao 做摘要存储 |
+| OAuth2 KV 的 GETDEL | 需 Redis ≥ 6.2，低版本 `getAndDelete` 抛异常 |
+| OAuth2 client 的 login CSRF | state 不绑定发起浏览器会话（见 USAGE 9.2），高危场景需业务侧二次确认 |

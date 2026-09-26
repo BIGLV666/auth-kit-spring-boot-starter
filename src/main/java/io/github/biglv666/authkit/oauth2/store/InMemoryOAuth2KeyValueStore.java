@@ -25,7 +25,13 @@ public class InMemoryOAuth2KeyValueStore implements OAuth2KeyValueStore {
 
     @Override
     public void put(String key, String value, long ttlMillis) {
-        store.put(key, new Entry(value, clock.getAsLong() + ttlMillis));
+        long now = clock.getAsLong();
+        // 写入时顺带清扫过期条目：state/授权码可能永远等不到读访问，放任不管会让
+        // 内存降级路径缓慢泄漏（仅条目量超过阈值才全表扫描，小 map 不付 O(n)）
+        if (store.size() >= 64) {
+            store.values().removeIf(entry -> entry.expireAtMillis() <= now);
+        }
+        store.put(key, new Entry(value, now + ttlMillis));
     }
 
     @Override
@@ -56,5 +62,10 @@ public class InMemoryOAuth2KeyValueStore implements OAuth2KeyValueStore {
     @Override
     public void delete(String key) {
         store.remove(key);
+    }
+
+    /** 当前条目数（仅测试与诊断用，并发下非精确瞬时值） */
+    int size() {
+        return store.size();
     }
 }

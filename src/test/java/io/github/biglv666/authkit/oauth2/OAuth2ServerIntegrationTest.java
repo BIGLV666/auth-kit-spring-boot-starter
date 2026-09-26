@@ -76,11 +76,12 @@ class OAuth2ServerIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(0));
 
-        // 5. 授权码一次性：重放 → invalid_grant
+        // 5. 授权码一次性：重放 → invalid_grant（HTTP 400）
         mockMvc.perform(post("/oauth2/token")
                         .param("grant_type", "authorization_code")
                         .param("client_id", "app1").param("client_secret", "secret-app1")
                         .param("code", code).param("redirect_uri", "https://app1.example/cb"))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.error").value("invalid_grant"));
 
         // 6. 刷新令牌轮换：旧 refresh 用后即废
@@ -96,6 +97,7 @@ class OAuth2ServerIntegrationTest {
                         .param("grant_type", "refresh_token")
                         .param("client_id", "app1").param("client_secret", "secret-app1")
                         .param("refresh_token", refreshToken))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.error").value("invalid_grant"));
         assertTrue(!newRefresh.equals(refreshToken), "refresh_token 应轮换");
     }
@@ -106,6 +108,7 @@ class OAuth2ServerIntegrationTest {
                         .param("grant_type", "authorization_code")
                         .param("client_id", "app1").param("client_secret", "wrong")
                         .param("code", "whatever").param("redirect_uri", "https://app1.example/cb"))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.error").value("invalid_client"));
     }
 
@@ -116,7 +119,51 @@ class OAuth2ServerIntegrationTest {
                         .param("response_type", "code").param("client_id", "app1")
                         .param("redirect_uri", "https://evil.example/cb")
                         .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.error").value("invalid_client"));
+    }
+
+    @Test
+    void scopeBeyondRegistrationRejected() throws Exception {
+        String userToken = login("10001");
+        mockMvc.perform(get("/oauth2/authorize")
+                        .param("response_type", "code").param("client_id", "app1")
+                        .param("redirect_uri", "https://app1.example/cb")
+                        .param("scope", "profile admin:write")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.error").value("invalid_scope"));
+    }
+
+    /**
+     * 回归：RFC 6749 要求 authorize 带 redirect_uri 时 token 请求原样带回；
+     * 客户端漏带该参数时必须是 invalid_grant(400)，而不是 NPE(500)。
+     */
+    @Test
+    void missingRedirectUriReturnsInvalidGrant() throws Exception {
+        String userToken = login("10001");
+        MvcResult authResult = mockMvc.perform(get("/oauth2/authorize")
+                        .param("response_type", "code").param("client_id", "app1")
+                        .param("redirect_uri", "https://app1.example/cb")
+                        .header("Authorization", "Bearer " + userToken))
+                .andExpect(status().is3xxRedirection())
+                .andReturn();
+        String code = extractParam(authResult.getResponse().getRedirectedUrl(), "code");
+        mockMvc.perform(post("/oauth2/token")
+                        .param("grant_type", "authorization_code")
+                        .param("client_id", "app1").param("client_secret", "secret-app1")
+                        .param("code", code))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.error").value("invalid_grant"));
+    }
+
+    @Test
+    void unsupportedGrantTypeRejected() throws Exception {
+        mockMvc.perform(post("/oauth2/token")
+                        .param("grant_type", "password")
+                        .param("client_id", "app1").param("client_secret", "secret-app1"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.error").value("unsupported_grant_type"));
     }
 
     @Test

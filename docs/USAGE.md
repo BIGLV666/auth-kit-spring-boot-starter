@@ -242,8 +242,14 @@ auth-kit:
 `POST /oauth2/token`（`grant_type=authorization_code` 或 `refresh_token`，refresh 轮换）。
 
 **关键设计：签发的 access_token 就是 auth-kit 会话凭证**——第三方应用拿它直接访问你的
-受保护接口，现有拦截链/注解/权限校验零改动；device 维度为 `OAuth2:{clientId}`，
-管理端点可按应用查看/踢出在线令牌。授权码一次性消费（Redis GETDEL 原子防重放）。
+受保护接口，现有拦截链/注解/权限校验零改动；device 维度为 `OAuth2:{clientId}#随机后缀`，
+每个令牌独立会话互不顶号，管理端点可按应用查看/踢出在线令牌。授权码一次性消费
+（Redis GETDEL 原子防重放，**需 Redis ≥ 6.2**）。
+
+补充说明：
+
+- token 端点所有错误（invalid_client / invalid_grant / invalid_scope 等）统一返回 **HTTP 400** + `{error, error_description}`；token 端点无内置频控，公网部署建议在网关层加限流防 client_secret 爆破；
+- 未登录访问 authorize 时会跳 `login-page?redirect=<原 authorize 地址>`——**业务登录页应校验 redirect 参数指向本站**（或反代固定 Host 头），否则攻击者可构造 `redirect=` 外域链接实施开放跳转。
 
 ### 9.2 第三方登录（让别人给你发令牌）
 
@@ -273,9 +279,15 @@ public OAuth2UserBinder oauth2UserBinder() {
 }
 ```
 
-用户入口 `GET /oauth2/login/github` → 平台授权 → 回调 `/oauth2/callback/github`
-（state 防 CSRF + 单次消费）→ 绑定 → 签发本站会话。内置 GitHub 与企业微信；
+用户入口 `GET /oauth2/login/{provider}` → 平台授权 → 回调 `/oauth2/callback/{provider}`
+（state 防 CSRF + 单次消费）→ 绑定 → 签发本站会话（device 为 `OAuth2:{provider}#随机后缀`，
+同一用户多点第三方登录互不顶号）。内置 GitHub 与企业微信；
 其他平台实现 `IdentityProvider`（authorizeUrl + exchange 两方法）注册 Bean 即接入。
+
+边界说明：state 未绑定发起浏览器会话，理论上存在 **login CSRF**（攻击者诱导受害者用攻击者的
+第三方凭证完成回调，受害者被登录进攻击者账号）；平台回传 `error` 参数（用户取消授权等）
+或换档案失败时，回调统一返回 400，不回显平台响应细节。对安全要求高的场景建议在
+`OAuth2UserBinder` 侧追加二次确认（如首次登录要求输入本地密码关联）。
 
 ### 9.3 SSO（单点登录）
 
@@ -283,6 +295,8 @@ public OAuth2UserBinder oauth2UserBinder() {
 部署在独立认证域名，各业务应用作为 9.2 的 client 接入，即完成"一次登录、处处通行"。
 任一应用登出/被踢，凭证全局失效；应用本地清理可监听 `AuthKitSessionEvent`
 （LOGOUT / KICKED_OUT / FORCED_LOGOUT / REPLACED）。
+注意事件只覆盖**主动失效**（登出/踢人/顶号），会话自然过期与活跃超时**不发事件**
+（无人触发删除动作）；依赖事件做本地缓存的场景需容忍该窗口。
 
 ### 3.7 管理端点（现成 HTTP 接口，默认关闭）
 

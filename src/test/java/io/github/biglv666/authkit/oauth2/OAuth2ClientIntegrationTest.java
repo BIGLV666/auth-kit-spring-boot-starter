@@ -19,6 +19,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static org.hamcrest.Matchers.startsWith;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -41,7 +42,7 @@ class OAuth2ClientIntegrationTest {
     @TestConfiguration
     static class FakeProviderConfig {
 
-        /** 假身份提供者：任何 code 都换出固定档案（验证流程编排，不验证平台协议） */
+        /** 假身份提供者：任何 code 都换出固定档案（code=boom 模拟平台侧换取失败，验证流程编排，不验证平台协议） */
         @Bean
         public IdentityProvider fakeProvider() {
             return new IdentityProvider() {
@@ -59,6 +60,9 @@ class OAuth2ClientIntegrationTest {
                 @Override
                 public OAuth2UserProfile exchange(io.github.biglv666.authkit.oauth2.OAuth2Properties.ProviderConfig config,
                                                   String code, String redirectUri) {
+                    if ("boom".equals(code)) {
+                        throw new IllegalStateException("GitHub 换取 access_token 失败: access_token=敏感信息");
+                    }
                     return new OAuth2UserProfile("fake", "open-10001", "fakeuser", null, null, java.util.Map.of());
                 }
             };
@@ -83,10 +87,10 @@ class OAuth2ClientIntegrationTest {
     }
 
     @Test
-    void unknownProviderRejected() throws Exception {
-        // web-common 统一包装：IllegalArgumentException → SYSTEM_ERROR(500)
+    void unknownProviderReturns404() throws Exception {
         mockMvc.perform(get("/oauth2/login/nope"))
-                .andExpect(jsonPath("$.code").value(500));
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.data.error").value("unknown_provider"));
     }
 
     @Test
@@ -100,10 +104,29 @@ class OAuth2ClientIntegrationTest {
         assertNotNull(url);
         assertTrue(url.startsWith("/sso-done?token="), "应携带 token 跳落地页");
         String token = extractParam(url, "token");
-        // 签发的是真正的 auth-kit 会话凭证（设备标识为 OAuth2:fake）
+        // 签发的是真正的 auth-kit 会话凭证（设备标识为 OAuth2:fake#随机后缀）
         mockMvc.perform(get("/me").header("Authorization", "Bearer " + token))
                 .andExpect(jsonPath("$.code").value(0))
-                .andExpect(jsonPath("$.data").value("10001:OAuth2:fake"));
+                .andExpect(jsonPath("$.data", startsWith("10001:OAuth2:fake#")));
+    }
+
+    @Test
+    void twoThirdPartyLoginsCoexist() throws Exception {
+        // device 带随机后缀：同一用户两次第三方登录互不顶号，两个凭证同时有效
+        String state1 = obtainState();
+        MvcResult first = mockMvc.perform(get("/oauth2/callback/fake")
+                        .param("code", "c1").param("state", state1))
+                .andExpect(status().is3xxRedirection()).andReturn();
+        String state2 = obtainState();
+        MvcResult second = mockMvc.perform(get("/oauth2/callback/fake")
+                        .param("code", "c2").param("state", state2))
+                .andExpect(status().is3xxRedirection()).andReturn();
+        String token1 = extractParam(first.getResponse().getRedirectedUrl(), "token");
+        String token2 = extractParam(second.getResponse().getRedirectedUrl(), "token");
+        mockMvc.perform(get("/me").header("Authorization", "Bearer " + token1))
+                .andExpect(jsonPath("$.code").value(0));
+        mockMvc.perform(get("/me").header("Authorization", "Bearer " + token2))
+                .andExpect(jsonPath("$.code").value(0));
     }
 
     @Test
@@ -111,7 +134,29 @@ class OAuth2ClientIntegrationTest {
         obtainState(); // 消耗一个合法 state
         mockMvc.perform(get("/oauth2/callback/fake")
                         .param("code", "any-code").param("state", "forged-state"))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.error").value("invalid_state"));
+    }
+
+    @Test
+    void platformErrorParamRejectedWithoutExchange() throws Exception {
+        String state = obtainState();
+        // 平台侧拒绝授权（用户取消等）回传 error 参数：直接 400，不发起换档案
+        mockMvc.perform(get("/oauth2/callback/fake")
+                        .param("error", "access_denied").param("state", state))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.error").value("access_denied"));
+    }
+
+    @Test
+    void exchangeFailureReturns400WithoutSensitiveDetail() throws Exception {
+        String state = obtainState();
+        // 换档案失败：对外仅 400 + 通用文案，平台响应细节（含 token）不得回显
+        mockMvc.perform(get("/oauth2/callback/fake")
+                        .param("code", "boom").param("state", state))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.error").value("invalid_grant"))
+                .andExpect(jsonPath("$.data.error_description").value("第三方档案换取失败"));
     }
 
     @Test
@@ -121,6 +166,7 @@ class OAuth2ClientIntegrationTest {
                 .andExpect(status().is3xxRedirection());
         // 同一 state 第二次使用 → invalid_state（防 CSRF 重放）
         mockMvc.perform(get("/oauth2/callback/fake").param("code", "a").param("state", state))
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.error").value("invalid_state"));
     }
 
