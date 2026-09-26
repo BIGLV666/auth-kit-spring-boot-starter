@@ -143,6 +143,38 @@ public Result<?> login(String username, String password) {
 
 计数在 Redis（固定窗口），多实例共享；无 Redis 自动降级内存。`fail-max-attempts<=0` 完全关闭。
 
+### 3.7 管理端点（现成 HTTP 接口，默认关闭）
+
+```yaml
+auth-kit:
+  management:
+    enabled: true
+    auth-token: "换成强随机串"
+```
+
+```bash
+# 查某人在线会话（token 脱敏显示）
+curl -H "X-Auth-Kit-Token: 换成强随机串" \
+     "http://host:port/auth-kit/online?userId=10001&device=APP"
+
+# 强制下线
+curl -X DELETE -H "X-Auth-Kit-Token: 换成强随机串" \
+     "http://host:port/auth-kit/online/10001"
+```
+
+令牌错误一律 401 且不回显细节。`base-path`、`auth-header` 均可配置。
+
+## 4. 异常出口：业务代码零 try-catch
+
+注解校验和 `checkXxx` 抛出的异常不用捕获：
+
+| 类路径 | NotLoginException | NotPermissionException / NotRoleException | LoginLockedException |
+|---|---|---|---|
+| 有 web-common | Result，code=40100（BE_REPLACED 用 `kicked-out-message` 文案） | Result，code=40300 | Result，code=40100 + 锁定文案 |
+| 无 web-common | HTTP 401 + `{code:401,message}` | HTTP 403 + `{code:403,message}` | HTTP 401 |
+
+前端凭 NotLoginException 的 reason 字段区分处理，对照表见 [README](../README.md#下线语义对照前端处理指南)。
+
 ## 5. 记住我
 
 ```java
@@ -297,35 +329,3 @@ public OAuth2UserBinder oauth2UserBinder() {
 （LOGOUT / KICKED_OUT / FORCED_LOGOUT / REPLACED）。
 注意事件只覆盖**主动失效**（登出/踢人/顶号），会话自然过期与活跃超时**不发事件**
 （无人触发删除动作）；依赖事件做本地缓存的场景需容忍该窗口。
-
-### 3.7 管理端点（现成 HTTP 接口，默认关闭）
-
-```yaml
-auth-kit:
-  management:
-    enabled: true
-    auth-token: "换成强随机串"
-```
-
-```bash
-# 查某人在线会话（token 脱敏显示）
-curl -H "X-Auth-Kit-Token: 换成强随机串" \
-     "http://host:port/auth-kit/online?userId=10001&device=APP"
-
-# 强制下线
-curl -X DELETE -H "X-Auth-Kit-Token: 换成强随机串" \
-     "http://host:port/auth-kit/online/10001"
-```
-
-令牌错误一律 401 且不回显细节。`base-path`、`auth-header` 均可配置。
-
-## 4. 异常出口：业务代码零 try-catch
-
-注解校验和 `checkXxx` 抛出的异常不用捕获：
-
-| 类路径 | NotLoginException | NotPermissionException / NotRoleException | LoginLockedException |
-|---|---|---|---|
-| 有 web-common | Result，code=40100（BE_REPLACED 用 `kicked-out-message` 文案） | Result，code=40300 | Result，code=40100 + 锁定文案 |
-| 无 web-common | HTTP 401 + `{code:401,message}` | HTTP 403 + `{code:403,message}` | HTTP 401 |
-
-前端凭 NotLoginException 的 reason 字段区分处理，对照表见 [README](../README.md#下线语义对照前端处理指南)。
