@@ -1,5 +1,7 @@
 # auth-kit-spring-boot-starter
 
+[![Maven Central](https://img.shields.io/maven-central/v/io.github.biglv666/auth-kit-spring-boot-starter)](https://central.sonatype.com/artifact/io.github.biglv666/auth-kit-spring-boot-starter) [![CI](https://github.com/BIGLV666/auth-kit-spring-boot-starter/actions/workflows/ci.yml/badge.svg)](https://github.com/BIGLV666/auth-kit-spring-boot-starter/actions/workflows/ci.yml)
+
 轻量级认证鉴权组件：**不透明 token + 有状态会话**，支持踢人下线、同端互斥、滑动续期、登录防爆破。
 **不带用户表**——auth-kit 只管认证与校验，用户数据通过 SPI 对接你自己的表。
 
@@ -47,7 +49,7 @@
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>auth-kit-spring-boot-starter</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
 </dependency>
 ```
 
