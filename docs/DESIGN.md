@@ -51,7 +51,7 @@ io.github.biglv666.authkit
 
 | key | 类型 | 内容 | TTL |
 |---|---|---|---|
-| `{prefix}:token:{token}` | Hash | token、userId、device、loginTime、lastActiveTime | 会话绝对有效期（登录时一次确定） |
+| `{prefix}:token:{token}` | Hash | token、userId、device、loginTime、lastActiveTime、rememberMe、expireAt | 会话绝对有效期（登录时一次确定） |
 | `{prefix}:kick:{token}` | String | 踢出原因（KICKED_OUT / BE_REPLACED） | 与会话有效期一致（墓碑） |
 | `{prefix}:user:{userId}` | ZSet | member=`device\|token`，score=预期过期时间戳 | 不过期，读时按 score 惰性清理 |
 | `{prefix}:attempt:{id}` | String | 登录失败计数 | 锁定窗口（固定窗口计数） |
@@ -124,7 +124,7 @@ AuthManager
 
 ### 6.1 不透明 token + 有状态会话，而非 JWT
 
-踢人下线、同端互斥、滑动续期、强制登出，本质都要求服务端持有会话状态。JWT 是无状态的，实现这些只能靠黑名单补丁——等于用更复杂的机制实现回有状态，还引入签名密钥管理问题。V1.5 的 JWT 模式将作为可选补充并附代价说明。
+踢人下线、同端互斥、滑动续期、强制登出，本质都要求服务端持有会话状态。JWT 是无状态的，实现这些只能靠黑名单补丁——等于用更复杂的机制实现回有状态，还引入签名密钥管理问题。JWT 模式（`token.mode=jwt`）已作为 1.0.0 的可选补充，代价见 6.11。
 
 ### 6.2 滑动续期不得延长绝对有效期（踩坑）
 
@@ -173,6 +173,14 @@ JWT 模式初版 claims 只有 uid/dev/iat/exp，秒级时间戳下**同一秒�
 ### 6.13 客户端 SPI 的边界
 
 `IdentityProvider` 只封装协议（跳转地址 + code 换档案），**用户归属归业务**（`OAuth2UserBinder`）——与"不带用户表"同一哲学。SSO 不单独实现：授权服务器（6.12）+ 客户端模式 + 共享 Redis 会话，三者组合即"一次登录处处通行"。
+
+### 6.14 绝对过期时间必须落库，不能只依赖 Redis TTL（踩坑，安全相关）
+
+续期路径原来是 `hasKey` + `HSET` 两步：若 key 恰好在两步之间过期，`HSET` 会**重建一个没有 TTL 的 Hash**，会话就此逃脱绝对有效期；JWT 模式的 `exp` 又只认全局 `timeout`，导致 `rememberMe` 会话实际按普通有效期过期。修复：会话模型新增 `expireAt`（登录时一次确定），opaque 校验显式兜底，JWT 据此计算 `exp`；续期改为 Lua 原子脚本。教训：**不要把安全边界寄托在存储层的隐式行为上**。
+
+### 6.15 OAuth2 客户端 token 默认走 fragment（安全相关）
+
+回调落地页原先把 token 拼在查询参数（`/sso-done?token=...`），会进入访问日志、浏览器历史与 Referer。现默认改为 fragment（`/sso-done#token=...`，不会发送到服务端）；`auth-kit.oauth2.client.token-delivery=query` 仅用于兼容旧前端，并应在迁移完成后移除。
 
 ## 7. 并发与一致性说明
 

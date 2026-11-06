@@ -12,7 +12,7 @@
 
 ## 为什么是有状态会话而不是 JWT
 
-踢人下线、同端互斥、滑动续期、强制登出，本质都要求服务端持有会话状态。JWT 无状态，实现这些只能靠黑名单补丁——用更复杂的机制实现回有状态，还引入密钥管理问题。JWT 模式将作为 V1.5 可选补充（附代价说明）。
+踢人下线、同端互斥、滑动续期、强制登出，本质都要求服务端持有会话状态。JWT 无状态，实现这些只能靠黑名单补丁——用更复杂的机制实现回有状态，还引入密钥管理问题。JWT 模式已作为 1.0.0 的可选补充（`token.mode=jwt`，代价与取舍见 [DESIGN.md](docs/DESIGN.md)）。
 
 ## 功能矩阵
 
@@ -49,7 +49,7 @@
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>auth-kit-spring-boot-starter</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
 </dependency>
 ```
 
@@ -179,7 +179,7 @@ OAuth2 / SSO 配置见 [USAGE.md](docs/USAGE.md#9-oauth2--sso)，要点：授权
 
 ## 测试与质量
 
-- **83 个测试全绿**：会话存储契约测试基类让内存/Redis 两套实现跑同一套用例（互为交叉验证）；Redis 用例直连真实 Redis（不可用时自动跳过）；GitHub Actions CI 带 Redis 服务容器
+- **129 个测试全绿**：会话存储契约测试基类让内存/Redis 两套实现跑同一套用例（互为交叉验证）；Redis 用例直连真实 Redis（不可用时自动跳过，本地跑通常显示 16 skipped）；GitHub Actions CI 带 Redis 服务容器，并在 JDK 17/21 双版本上执行
 - **可注入时钟**：滑动续期/活跃超时/顶号驱逐/JWT 过期用假时钟验证，测试不 sleep
 - **真实项目验证**：PaperWise（Boot 3.5 + Redis + MySQL）已完成 JWT→auth-kit 迁移，登录/顶号/登出/伪造 token 全流程实测通过，详见 [INTEGRATION.md](docs/INTEGRATION.md)
 - **演示工程**：[examples/auth-kit-demo](examples/auth-kit-demo)（登录/注解/二级认证/顶号一条龙 curl 演示）
@@ -221,10 +221,18 @@ ThreadLocal 不跨线程传递。提交任务前先 `AuthKit.getLoginId()` 取�
 - 生产环境必须配 Redis，内存实现仅限开发
 - token 明文作会话 key，如需抗 Redis 泄露可二开 SessionDao 做摘要存储
 
+## 升级注意（1.2.0）
+
+- **OAuth2 第三方登录的 token 投递默认从查询参数改为 fragment**：落地页现在是 `/sso-done#token=...`。前端若仍从 `?token=` 读取，请改为读取 `location.hash`，或临时配置 `auth-kit.oauth2.client.token-delivery=query` 兼容旧逻辑（迁移完成后应移除）。
+- 会话 Hash 新增 `expireAt` 字段，旧会话缺少该字段时按原有 TTL 行为兼容，无需数据迁移。
+
 ## Roadmap
 
-- **V1.0.0（当前）**：V1 全量 + 记住我、二级认证、JWT 可选模式、会话并发治理
-- **V2**：OAuth2 / 单点登录模块（下一步大动作）、`@DataScope` 行级数据权限（MyBatis-Plus 拦截器织入 + 部门树 SPI）、WebFlux 支持
+- **V1.1.0**：OAuth2 / 单点登录合入主模块（授权服务器 + 第三方登录 + SSO）
+- **V1.2.0（当前）**：JWT 记住我修复、Redis 原子续期、OAuth2 token 改为 fragment 投递、防爆破命名空间隔离、文档与 CI 对齐
+- **V1.3.0**：可观测性（Micrometer / Health / 审计日志）、管理端点增强、异步上下文传递
+- **V1.4.0**：OAuth2 PKCE、state 绑定浏览器会话、scope 强制校验、撤销/内省端点
+- **V2**：WebFlux 支持与模块拆分、`@DataScope` 行级数据权限（可选模块）
 
 ## License
 

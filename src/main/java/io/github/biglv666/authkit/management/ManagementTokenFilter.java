@@ -31,7 +31,7 @@ public class ManagementTokenFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        if (!request.getRequestURI().startsWith(basePath)) {
+        if (!isManagementPath(request)) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -43,6 +43,25 @@ public class ManagementTokenFilter extends OncePerRequestFilter {
             return;
         }
         filterChain.doFilter(request, response);
+    }
+
+    /**
+     * 判断请求是否落在管理端点下：去掉 context-path 后按路径段边界匹配，
+     * 避免 base-path=/auth-kit 时误伤 /auth-kit-xxx 之类的业务路径。
+     */
+    private boolean isManagementPath(HttpServletRequest request) {
+        String uri = request.getRequestURI();
+        String contextPath = request.getContextPath();
+        String path = (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath))
+                ? uri.substring(contextPath.length())
+                : uri;
+        String base = basePath.endsWith("/") && basePath.length() > 1
+                ? basePath.substring(0, basePath.length() - 1)
+                : basePath;
+        if ("/".equals(base)) {
+            return true;
+        }
+        return path.equals(base) || path.startsWith(base + "/");
     }
 
     private static String sha256(String value) {

@@ -4,7 +4,7 @@ auth-kit 最小演示工程。启动：
 
 ```bash
 cd examples/auth-kit-demo
-mvn spring-boot:run   # 需先 mvn install 父工程（auth-kit 1.0.0）
+mvn spring-boot:run   # 需先在仓库根目录 mvn install（auth-kit 1.2.0）
 ```
 
 本机有 Redis 自动启用；没有则降级内存会话（启动日志有 WARN 提示）。

@@ -13,7 +13,7 @@
 
     <groupId>io.github.biglv666</groupId>
     <artifactId>auth-kit-spring-boot-starter</artifactId>
-    <version>1.1.0</version>
+    <version>1.2.0</version>
     <name>auth-kit-spring-boot-starter</name>
     <description>轻量级认证鉴权组件：不透明 token + 有状态会话，支持踢人下线、同端互斥、滑动续期，不带用户表</description>
     <url>https://github.com/BIGLV666/auth-kit-spring-boot-starter</url>
@@ -117,6 +117,27 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <!-- 覆盖率报告：mvn test 后生成 target/site/jacoco/index.html（不设门禁，避免历史欠账阻塞构建） -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.12</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <!-- Central 发布插件常驻：日常 deploy 未带 release profile 时也能走通，
                  但缺 javadoc/source/签名会被 Portal 校验拒绝——正式发布请用 -Prelease -->

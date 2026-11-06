@@ -72,6 +72,32 @@ class AuthManagerJwtModeTest {
     }
 
     @Test
+    void jwtRememberMeHonorsRememberTimeout() {
+        InMemorySessionDao rememberDao = new InMemorySessionDao(now::get);
+        AuthManager rememberManager = new AuthManager(
+                rememberDao, new RandomTokenGenerator(32), 10_000, 0, 1, 60_000, 0, now::get);
+        rememberManager.setTokenCodec(new JwtTokenCodec("jwt-mode-test-secret-001", 10_000, now::get));
+
+        String credential = rememberManager.login(10001, "APP", true);
+        now.addAndGet(30_000);
+        assertEquals("10001", rememberManager.checkLogin(credential).getUserId(),
+                "记住我 JWT 应按 remember-timeout（60s）生效，而不是普通 timeout（10s）");
+
+        now.addAndGet(40_000);
+        assertEquals(NotLoginReason.TOKEN_TIMEOUT, reasonOf(rememberManager, credential),
+                "超过 remember-timeout 后应过期");
+    }
+
+    private NotLoginReason reasonOf(AuthManager mgr, String credential) {
+        try {
+            mgr.checkLogin(credential);
+            return null;
+        } catch (NotLoginException e) {
+            return e.getReason();
+        }
+    }
+
+    @Test
     void jwtListSessionsDescribesFromClaims() {
         manager.setTokenCodec(new JwtTokenCodec("jwt-mode-test-secret-001", 30_000, now::get));
         String credential = login("WEB");

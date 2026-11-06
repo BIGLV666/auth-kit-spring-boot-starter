@@ -102,7 +102,7 @@ class OAuth2ClientIntegrationTest {
                 .andReturn();
         String url = result.getResponse().getRedirectedUrl();
         assertNotNull(url);
-        assertTrue(url.startsWith("/sso-done?token="), "应携带 token 跳落地页");
+        assertTrue(url.startsWith("/sso-done#token="), "默认应以 fragment 携带 token 跳落地页");
         String token = extractParam(url, "token");
         // 签发的是真正的 auth-kit 会话凭证（设备标识为 OAuth2:fake#随机后缀）
         mockMvc.perform(get("/me").header("Authorization", "Bearer " + token))
@@ -177,7 +177,7 @@ class OAuth2ClientIntegrationTest {
     }
 
     private static String extractParam(String url, String param) {
-        Matcher m = Pattern.compile("[?&]" + param + "=([^&]+)").matcher(url);
+        Matcher m = Pattern.compile("[?&#]" + param + "=([^&]+)").matcher(url);
         assertTrue(m.find(), "应含参数 " + param);
         return URLDecoder.decode(m.group(1), StandardCharsets.UTF_8);
     }

@@ -149,6 +149,8 @@ public class AuthManager {
         long ttl = rememberMe ? rememberTimeoutMillis : timeoutMillis;
         AuthSession session = new AuthSession(randomToken, uid, device, now, now);
         session.setRememberMe(rememberMe);
+        // 绝对过期时间与会话 TTL 一起落库：opaque 模式作显式兜底，JWT 模式据此计算 exp
+        session.setExpireAt(now + ttl);
         sessionDao.saveSession(session, ttl);
 
         TokenCodec codec = tokenCodec;
@@ -340,6 +342,13 @@ public class AuthManager {
         long now = clock.getAsLong();
         if (activeTimeoutMillis > 0 && now - session.getLastActiveTime() > activeTimeoutMillis) {
             // 长期不活跃：主动清除会话与索引
+            sessionDao.deleteSession(credential);
+            sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), credential);
+            throw new NotLoginException(NotLoginReason.TOKEN_TIMEOUT);
+        }
+        // 绝对有效期兜底：正常由 Redis TTL 删除；显式校验防极端情况下 key 被无 TTL 复活
+        long expireAt = session.getExpireAt();
+        if (expireAt > 0 && now >= expireAt) {
             sessionDao.deleteSession(credential);
             sessionDao.removeFromUserIndex(session.getUserId(), session.getDevice(), credential);
             throw new NotLoginException(NotLoginReason.TOKEN_TIMEOUT);

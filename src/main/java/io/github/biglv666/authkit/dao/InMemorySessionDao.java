@@ -100,9 +100,14 @@ public class InMemorySessionDao implements SessionDao {
         if (tokens != null) {
             tokens.remove(token);
         }
-        // 设备为空时（全量踢出）需要把其它设备的索引条目一并移除
+        // 设备为空时（全量踢出）需要把该用户其它设备的索引条目一并移除
         if (device == null) {
-            userIndex.forEach((k, v) -> v.remove(token));
+            String userPrefix = userId + ":";
+            userIndex.forEach((k, v) -> {
+                if (k.startsWith(userPrefix)) {
+                    v.remove(token);
+                }
+            });
         }
     }
 

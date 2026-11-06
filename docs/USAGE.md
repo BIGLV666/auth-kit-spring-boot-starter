@@ -2,7 +2,8 @@
 
 本文回答三个最常见的问题：默认拦不拦截所有方法？怎么取当前用户 id？每个 API 具体怎么用？
 
-> V1.0.0 新增：记住我、二级认证 `@RequireSafe`、JWT 可选模式、按设备会话上限，见第 5-8 节。
+> V1.0.0：记住我、二级认证 `@RequireSafe`、JWT 可选模式、按设备会话上限（第 5-8 节）。
+> V1.1.0：OAuth2 / SSO（第 9 节）。V1.2.0：JWT 记住我修复、OAuth2 token 默认 fragment 投递。
 
 ## 1. 默认拦截语义：注册所有路径，默认不拦任何请求
 
@@ -290,7 +291,9 @@ auth-kit:
   oauth2:
     client:
       enabled: true
-      success-redirect: "/sso-done"   # 登录成功落地页（token 附在查询参数）
+      success-redirect: "/sso-done"   # 登录成功落地页
+      token-delivery: fragment        # 默认 #token=...（fragment 不上传服务端，不进访问日志/Referer）
+                                      # 旧前端可临时改 query（?token=...），迁移完成后应移除
       providers:
         github:
           client-id: xxx
@@ -313,8 +316,9 @@ public OAuth2UserBinder oauth2UserBinder() {
 
 用户入口 `GET /oauth2/login/{provider}` → 平台授权 → 回调 `/oauth2/callback/{provider}`
 （state 防 CSRF + 单次消费）→ 绑定 → 签发本站会话（device 为 `OAuth2:{provider}#随机后缀`，
-同一用户多点第三方登录互不顶号）。内置 GitHub 与企业微信；
-其他平台实现 `IdentityProvider`（authorizeUrl + exchange 两方法）注册 Bean 即接入。
+同一用户多点第三方登录互不顶号）。落地页地址形如 `/sso-done#token=...`，
+前端从 `location.hash` 读取 token——fragment 不会随请求发送到服务端，避免进入访问日志与 Referer。
+内置 GitHub 与企业微信；其他平台实现 `IdentityProvider`（authorizeUrl + exchange 两方法）注册 Bean 即接入。
 
 边界说明：state 未绑定发起浏览器会话，理论上存在 **login CSRF**（攻击者诱导受害者用攻击者的
 第三方凭证完成回调，受害者被登录进攻击者账号）；平台回传 `error` 参数（用户取消授权等）

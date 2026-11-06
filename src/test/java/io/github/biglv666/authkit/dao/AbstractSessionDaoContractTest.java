@@ -46,6 +46,15 @@ public abstract class AbstractSessionDaoContractTest {
     }
 
     @Test
+    void expireAtRoundtrip() {
+        AuthSession session = session("t-expire", "10001", "APP", 1000);
+        session.setExpireAt(61_000);
+        dao.saveSession(session, 60_000);
+        assertEquals(61_000, dao.getSession("t-expire").getExpireAt(),
+                "绝对过期时间必须随会话持久化（JWT 模式据此计算 exp）");
+    }
+
+    @Test
     void deleteIsIdempotent() {
         dao.saveSession(session("t2", "10001", "APP", 1000), 60_000);
         dao.deleteSession("t2");
@@ -117,5 +126,15 @@ public abstract class AbstractSessionDaoContractTest {
     void removeIndexIsIdempotent() {
         dao.removeFromUserIndex("nobody", "APP", "t9");
         assertTrue(dao.getUserTokens("nobody", "APP").isEmpty());
+    }
+
+    @Test
+    void removeFromUserIndexAllDevices() {
+        long expireAt = System.currentTimeMillis() + 60_000;
+        dao.addToUserIndex("10002", "APP", "t-all", expireAt);
+        dao.addToUserIndex("10002", "PC", "t-all", expireAt);
+        dao.removeFromUserIndex("10002", null, "t-all");
+        assertTrue(dao.getUserTokens("10002", null).isEmpty(),
+                "device=null 时必须清理该用户全部设备的索引条目");
     }
 }
