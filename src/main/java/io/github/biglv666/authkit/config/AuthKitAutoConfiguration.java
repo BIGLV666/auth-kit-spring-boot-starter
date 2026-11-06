@@ -213,8 +213,11 @@ public class AuthKitAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public LoginAttemptGuard loginAttemptGuard(AttemptStore attemptStore, AuthKitProperties properties) {
+        // guard.enabled=false 时把阈值置 0，守卫自身即完全停用
+        int maxAttempts = properties.isGuardEnabled() ? properties.getFailMaxAttempts() : 0;
         return new LoginAttemptGuard(attemptStore,
-                properties.getFailMaxAttempts(), properties.getLockDuration().toMillis());
+                maxAttempts, properties.getLockDuration().toMillis(),
+                properties.getKeyPrefix());
     }
 
     // ── 异常映射：有 web-common 用 Result，否则原生 401/403 ──

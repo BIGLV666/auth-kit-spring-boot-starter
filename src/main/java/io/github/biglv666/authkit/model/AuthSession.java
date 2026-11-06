@@ -19,6 +19,12 @@ public class AuthSession {
     private long lastActiveTime;
     /** 是否记住我（长效会话） */
     private boolean rememberMe;
+    /**
+     * 会话绝对过期时间戳（毫秒）：登录时一次确定，任何活跃都不延长。
+     * <p>opaque 模式下作为 Redis TTL 之外的显式兜底校验；JWT 模式据此计算 exp
+     * （记住我会话因此也能正确使用 remember-timeout）。0 表示旧数据未记录。</p>
+     */
+    private long expireAt;
 
     public AuthSession() {
     }
@@ -77,5 +83,13 @@ public class AuthSession {
 
     public void setLastActiveTime(long lastActiveTime) {
         this.lastActiveTime = lastActiveTime;
+    }
+
+    public long getExpireAt() {
+        return expireAt;
+    }
+
+    public void setExpireAt(long expireAt) {
+        this.expireAt = expireAt;
     }
 }

@@ -19,16 +19,24 @@ import io.github.biglv666.authkit.exception.LoginLockedException;
  */
 public class LoginAttemptGuard {
 
-    private static final String KEY_PREFIX = "auth-kit:attempt:";
+    private static final String DEFAULT_KEY_PREFIX = "auth-kit";
 
     private final AttemptStore attemptStore;
     private final int failMaxAttempts;
     private final long lockDurationMillis;
+    /** 与 session.key-prefix 对齐，避免多环境共用 Redis 时失败计数串号 */
+    private final String keyPrefix;
 
     public LoginAttemptGuard(AttemptStore attemptStore, int failMaxAttempts, long lockDurationMillis) {
+        this(attemptStore, failMaxAttempts, lockDurationMillis, DEFAULT_KEY_PREFIX);
+    }
+
+    public LoginAttemptGuard(AttemptStore attemptStore, int failMaxAttempts, long lockDurationMillis,
+                             String keyPrefix) {
         this.attemptStore = attemptStore;
         this.failMaxAttempts = failMaxAttempts;
         this.lockDurationMillis = lockDurationMillis;
+        this.keyPrefix = (keyPrefix == null || keyPrefix.isBlank()) ? DEFAULT_KEY_PREFIX : keyPrefix;
     }
 
     /** 防爆破是否启用（fail-max-attempts <= 0 时关闭） */
@@ -72,6 +80,6 @@ public class LoginAttemptGuard {
 
     /** 标识直接进入 key，避免歧义时业务方可先做规范化（如统一大小写） */
     private String key(String identifier) {
-        return KEY_PREFIX + identifier;
+        return keyPrefix + ":attempt:" + identifier;
     }
 }

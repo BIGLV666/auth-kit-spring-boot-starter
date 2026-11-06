@@ -20,8 +20,9 @@ import java.util.Map;
 /**
  * 第三方登录端点：/oauth2/login/{provider} 跳平台授权页 →
  * /oauth2/callback/{provider} 换档案 → 业务绑定 → 签发 auth-kit 会话凭证。
- * <p>登录成功后 302 到配置的 success-redirect，token 以查询参数附带
- * （演示友好；生产建议改成前端引导页 + localStorage 或 POST 表单提交）。</p>
+ * <p>登录成功后 302 到配置的 success-redirect。token 默认放在 URL fragment
+ * （{@code /sso-done#token=...}）：fragment 不会发送到服务端，也不进入 Referer/访问日志；
+ * 需要兼容旧前端时可配置 {@code token-delivery=query}。</p>
  * <p>已知边界：state 不绑定发起浏览器会话，理论上存在 login CSRF
  * （攻击者诱导受害者用攻击者凭证完成回调）；轻量实现的取舍，见 USAGE 9.2。</p>
  */
@@ -105,9 +106,22 @@ public class OAuth2ClientController {
         }
         // device 带随机后缀：同一用户多点经第三方登录互不顶号（与 server 侧签发语义一致）
         String token = authManager.login(userId, "OAuth2:" + provider + "#" + random.generate().substring(0, 8));
-        String redirect = properties.getClient().getSuccessRedirect();
-        return new RedirectView(redirect + (redirect.contains("?") ? "&" : "?")
-                + "token=" + java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8));
+        return new RedirectView(buildSuccessRedirect(
+                properties.getClient().getSuccessRedirect(),
+                properties.getClient().getTokenDelivery(),
+                token));
+    }
+
+    /**
+     * 构造落地页地址：默认 token 放 fragment（不随请求发送到服务端），
+     * {@code token-delivery=query} 时保留旧的查询参数行为。
+     */
+    static String buildSuccessRedirect(String redirect, String delivery, String token) {
+        String encoded = java.net.URLEncoder.encode(token, java.nio.charset.StandardCharsets.UTF_8);
+        if ("query".equalsIgnoreCase(delivery)) {
+            return redirect + (redirect.contains("?") ? "&" : "?") + "token=" + encoded;
+        }
+        return redirect + (redirect.contains("#") ? "&" : "#") + "token=" + encoded;
     }
 
     /** 浏览器可见的错误响应：status 明确（400/404），body 为 OAuth2 风格 error 结构 */

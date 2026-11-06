@@ -4,9 +4,12 @@ import io.github.biglv666.authkit.exception.NotLoginReason;
 import io.github.biglv666.authkit.model.AuthSession;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -27,6 +30,16 @@ public class RedisSessionDao implements SessionDao {
     private static final String USER_KEY = ":user:";
     private static final String INDEX_SEPARATOR = "|";
 
+    /**
+     * 原子续期脚本：仅当会话 key 仍存在时更新 lastActiveTime。
+     * <p>不能拆成 hasKey + HSET：两步之间 key 若恰好过期，HSET 会重建一个<b>无 TTL</b> 的 Hash，
+     * 使会话逃脱绝对有效期。Lua 在 Redis 单线程内原子执行，杜绝该窗口。</p>
+     */
+    private static final RedisScript<Long> TOUCH_LAST_ACTIVE_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('exists', KEYS[1]) == 1 then "
+                    + "redis.call('hset', KEYS[1], 'lastActiveTime', ARGV[1]); return 1 end return 0",
+            Long.class);
+
     private final StringRedisTemplate redis;
     private final String prefix;
 
@@ -38,13 +51,14 @@ public class RedisSessionDao implements SessionDao {
     @Override
     public void saveSession(AuthSession session, long timeoutMillis) {
         String key = prefix + TOKEN_KEY + session.getToken();
-        Map<String, String> fields = new HashMap<>(6);
+        Map<String, String> fields = new HashMap<>(8);
         fields.put("token", session.getToken());
         fields.put("userId", session.getUserId());
         fields.put("device", session.getDevice());
         fields.put("loginTime", String.valueOf(session.getLoginTime()));
         fields.put("lastActiveTime", String.valueOf(session.getLastActiveTime()));
         fields.put("rememberMe", String.valueOf(session.isRememberMe()));
+        fields.put("expireAt", String.valueOf(session.getExpireAt()));
         redis.opsForHash().putAll(key, fields);
         redis.expire(key, java.time.Duration.ofMillis(timeoutMillis));
     }
@@ -63,6 +77,9 @@ public class RedisSessionDao implements SessionDao {
         session.setLastActiveTime(Long.parseLong((String) fields.get("lastActiveTime")));
         Object remember = fields.get("rememberMe");
         session.setRememberMe(remember != null && Boolean.parseBoolean((String) remember));
+        // 旧版本写入的会话没有 expireAt 字段，保持 0 以走兼容路径
+        Object expireAt = fields.get("expireAt");
+        session.setExpireAt(expireAt == null ? 0 : Long.parseLong((String) expireAt));
         return session;
     }
 
@@ -73,11 +90,10 @@ public class RedisSessionDao implements SessionDao {
 
     @Override
     public void updateLastActiveTime(String token, long lastActiveTimeMillis) {
-        String key = prefix + TOKEN_KEY + token;
-        // 仅在会话仍存在时更新，避免 HSET 重新创建丢失 TTL 的裸 key
-        if (Boolean.TRUE.equals(redis.hasKey(key))) {
-            redis.opsForHash().put(key, "lastActiveTime", String.valueOf(lastActiveTimeMillis));
-        }
+        // 原子脚本：会话不存在时静默忽略，存在时只改字段、不碰 TTL（绝对有效期不延长）
+        redis.execute(TOUCH_LAST_ACTIVE_SCRIPT,
+                List.of(prefix + TOKEN_KEY + token),
+                String.valueOf(lastActiveTimeMillis));
     }
 
     @Override
@@ -107,7 +123,21 @@ public class RedisSessionDao implements SessionDao {
 
     @Override
     public void removeFromUserIndex(String userId, String device, String token) {
-        redis.opsForZSet().remove(prefix + USER_KEY + userId, indexMember(device, token));
+        String userKey = prefix + USER_KEY + userId;
+        if (device != null) {
+            redis.opsForZSet().remove(userKey, indexMember(device, token));
+            return;
+        }
+        // device=null 表示全端清理：逐个匹配 "device|token" 后缀（member 中 token 唯一）
+        Set<String> members = redis.opsForZSet().range(userKey, 0, -1);
+        if (members == null || members.isEmpty()) {
+            return;
+        }
+        String suffix = INDEX_SEPARATOR + token;
+        Object[] toRemove = members.stream().filter(m -> m.endsWith(suffix)).toArray();
+        if (toRemove.length > 0) {
+            redis.opsForZSet().remove(userKey, toRemove);
+        }
     }
 
     @Override

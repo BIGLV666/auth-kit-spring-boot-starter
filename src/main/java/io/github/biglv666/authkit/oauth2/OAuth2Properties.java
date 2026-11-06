@@ -64,8 +64,16 @@ public class OAuth2Properties {
     public static class Client {
         /** 是否启用第三方登录端点（配置了任一 provider 即建议开启） */
         private boolean enabled = false;
-        /** 登录成功后的落地页（token 以查询参数附带） */
+        /** 登录成功后的落地页 */
         private String successRedirect = "/";
+        /**
+         * token 投递方式：
+         * <ul>
+         *   <li>{@code fragment}（默认）：{@code /sso-done#token=...}，浏览器不上传 fragment，避免 Referer/日志泄漏；</li>
+         *   <li>{@code query}：{@code /sso-done?token=...}，兼容旧前端，但 token 会进入访问日志与 Referer。</li>
+         * </ul>
+         */
+        private String tokenDelivery = "fragment";
         /** 第三方平台注册表：key=provider 名（github/wecom/...） */
         private Map<String, ProviderConfig> providers = new HashMap<>();
 
@@ -73,6 +81,8 @@ public class OAuth2Properties {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public String getSuccessRedirect() { return successRedirect; }
         public void setSuccessRedirect(String successRedirect) { this.successRedirect = successRedirect; }
+        public String getTokenDelivery() { return tokenDelivery; }
+        public void setTokenDelivery(String tokenDelivery) { this.tokenDelivery = tokenDelivery; }
         public Map<String, ProviderConfig> getProviders() { return providers; }
         public void setProviders(Map<String, ProviderConfig> providers) { this.providers = providers; }
     }

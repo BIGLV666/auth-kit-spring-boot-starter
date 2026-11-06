@@ -47,7 +47,10 @@ public class JwtTokenCodec implements TokenCodec {
     public String issue(AuthSession session, String randomToken) {
         long now = clock.getAsLong();
         long iat = now / SECONDS_SHIFT;
-        long exp = (now + timeoutMillis) / SECONDS_SHIFT;
+        // 优先使用会话自身的绝对过期时间（记住我会话走 remember-timeout），
+        // 仅旧数据未记录 expireAt 时回退到 codec 的全局 timeout。
+        long expireAtMillis = session.getExpireAt() > 0 ? session.getExpireAt() : now + timeoutMillis;
+        long exp = expireAtMillis / SECONDS_SHIFT;
         // jti = 内部随机 token：保证同一秒内同用户同设备的两次登录凭证不同（防会话固定）
         String payload = "{\"uid\":\"" + escape(session.getUserId())
                 + "\",\"dev\":\"" + escape(session.getDevice())
@@ -90,11 +93,15 @@ public class JwtTokenCodec implements TokenCodec {
             String uid = readStringClaim(payload, "uid");
             String dev = readStringClaim(payload, "dev");
             Long iat = readNumericClaim(payload, "iat");
+            Long exp = readNumericClaim(payload, "exp");
             AuthSession session = new AuthSession();
             session.setToken(credential);
             session.setUserId(uid);
             session.setDevice(dev);
             session.setLoginTime(iat == null ? 0 : iat * SECONDS_SHIFT);
+            if (exp != null) {
+                session.setExpireAt(exp * SECONDS_SHIFT);
+            }
             return session;
         } catch (Exception e) {
             return null;

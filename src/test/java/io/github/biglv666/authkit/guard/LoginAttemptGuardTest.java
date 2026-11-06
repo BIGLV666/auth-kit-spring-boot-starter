@@ -47,4 +47,14 @@ class LoginAttemptGuardTest {
         disabled.recordFailure("erin");
         assertDoesNotThrow(() -> disabled.check("erin"), "阈值 <=0 时应完全不启用");
     }
+
+    @Test
+    void keyPrefixIsolatesEnvironments() {
+        InMemoryAttemptStore store = new InMemoryAttemptStore();
+        LoginAttemptGuard prod = new LoginAttemptGuard(store, 1, 60_000, "auth-kit-prod");
+        LoginAttemptGuard dev = new LoginAttemptGuard(store, 1, 60_000, "auth-kit-dev");
+        prod.recordFailure("frank");
+        assertDoesNotThrow(() -> dev.check("frank"), "不同 key-prefix 的失败计数必须相互隔离");
+        assertThrows(LoginLockedException.class, () -> prod.check("frank"));
+    }
 }
