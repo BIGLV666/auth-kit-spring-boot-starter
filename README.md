@@ -31,7 +31,7 @@
 | 五种下线语义 | NO_TOKEN / TOKEN_INVALID / TOKEN_TIMEOUT / KICKED_OUT / BE_REPLACED |
 | 异常统一出口 | 有 web-common → Result(40100/40300)；无 → 原生 401/403 |
 | BCrypt + PasswordEncoder SPI | 类路径有 spring-security-crypto 自动提供，否则业务自配 |
-| 登录防爆破 | `LoginAttemptGuard` 三段式插桩，Redis 计数、内存降级 |
+| 登录防爆破 | `LoginAttemptGuard` 三段式插桩；默认固定窗口计数，可选 risk-control 滑动尝试窗口 + 递增风控（5m→15m→1h→6h→24h） |
 | 管理端点 | 在线会话查询/强制下线；静态令牌保护，默认关闭，启用必须配令牌 |
 | **记住我** | `login(userId, device, rememberMe)`，remember 会话走 `remember-timeout` 长效期 |
 | **二级认证** | `@RequireSafe` + `openSafe/isSafe/closeSafe`，敏感操作 N 分钟免二次验密 |
@@ -140,7 +140,7 @@ Redis key 设计与会话状态机详见 [DESIGN.md](docs/DESIGN.md)。
 
 ## 配置
 
-零配置可跑（默认：Authorization + Bearer、30d 绝对有效期 + 7d 活跃超时、顶号、防爆破 5 次/15m、白名单 /login 与 /actuator/**）。
+零配置可跑（默认：Authorization + Bearer、30d 绝对有效期 + 7d 活跃超时、顶号、防爆破 5 次/15m（固定窗口计数）、白名单 /login 与 /actuator/**）。
 
 常用定制见 [CONFIGURATION.md](docs/CONFIGURATION.md)（全部配置项 + 环境示例 + 扩展点替换），常用两项：
 
@@ -172,15 +172,16 @@ OAuth2 / SSO 配置见 [USAGE.md](docs/USAGE.md#9-oauth2--sso)，要点：授权
 | SPI | 职责 | 默认实现 | 替换方式 |
 |---|---|---|---|
 | `SessionDao` | 会话存储 | Redis（自动）/内存（降级） | 注册同类型 Bean |
-| `AttemptStore` | 失败计数 | Redis（自动）/内存（降级） | 注册同类型 Bean |
+| `AttemptStore` | 失败计数（counter 模式） | Redis（自动）/内存（降级） | 注册同类型 Bean |
+| `RiskControlStore` | 风控状态（risk-control 模式） | Redis Lua（自动）/内存（降级） | 注册同类型 Bean |
 | `TokenGenerator` | token 形态 | SecureRandom 64 字符 | 注册同类型 Bean |
 | `PermissionProvider` | 权限数据源 | 无（业务必配） | 注册同类型 Bean |
 | `PasswordEncoder` | 密码编码 | BCrypt（需 security-crypto） | 注册同类型 Bean |
 
 ## 测试与质量
 
-- **129 个测试全绿**：会话存储契约测试基类让内存/Redis 两套实现跑同一套用例（互为交叉验证）；Redis 用例直连真实 Redis（不可用时自动跳过，本地跑通常显示 16 skipped）；GitHub Actions CI 带 Redis 服务容器，并在 JDK 17/21 双版本上执行
-- **可注入时钟**：滑动续期/活跃超时/顶号驱逐/JWT 过期用假时钟验证，测试不 sleep
+- **184 个测试全绿**：会话存储契约测试基类让内存/Redis 两套实现跑同一套用例（互为交叉验证）；Redis 用例直连真实 Redis（不可用时自动跳过）；GitHub Actions CI 带 Redis 服务容器，并在 JDK 17/21 双版本上执行
+- **可注入时钟**：滑动续期/活跃超时/顶号驱逐/JWT 过期/风控升级用假时钟验证；仅 Redis TTL 物理过期用例做短 sleep
 - **真实项目验证**：PaperWise（Boot 3.5 + Redis + MySQL）已完成 JWT→auth-kit 迁移，登录/顶号/登出/伪造 token 全流程实测通过，详见 [INTEGRATION.md](docs/INTEGRATION.md)
 - **演示工程**：[examples/auth-kit-demo](examples/auth-kit-demo)（登录/注解/二级认证/顶号一条龙 curl 演示）
 - 设计踩坑记录（绝对有效期污染、ThreadLocal 串号、JWT 同秒碰撞等）见 [DESIGN.md 决策记录](docs/DESIGN.md)

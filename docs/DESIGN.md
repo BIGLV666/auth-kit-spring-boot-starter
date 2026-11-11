@@ -16,15 +16,16 @@
 │  SPI 接口层    │       │        ▼                ▼          │
 │ SessionDao    │◄──────┤  ┌─────────────────────────┐       │
 │ AttemptStore  │       │  │ SessionDao 实现（可选其一） │       │
-│ TokenGenerator│       │  │ RedisSessionDao(生产默认) │       │
-│ PermissionProv│       │  │ InMemorySessionDao(降级)  │       │
-│ PasswordEncder│       │  └───────────┬─────────────┘       │
+│ RiskControlStore│     │  │ RedisSessionDao(生产默认) │       │
+│ TokenGenerator│       │  │ InMemorySessionDao(降级)  │       │
+│ PermissionProv│       │  └───────────┬─────────────┘       │
+│ PasswordEncder│       │              │                     │
 └───────────────┘       └──────────────┼──────────────────────┘
                                        ▼
                                  Redis / 内存
 ```
 
-分层原则：**接口与实现彻底分离**。五条 SPI（SessionDao / AttemptStore / TokenGenerator / PermissionProvider / PasswordEncoder）全部可由业务方注册 Bean 全量替换，自动装配层对所有 Bean 加 `@ConditionalOnMissingBean`。
+分层原则：**接口与实现彻底分离**。五条核心 SPI（SessionDao / AttemptStore / TokenGenerator / PermissionProvider / PasswordEncoder）加上风控状态 SPI（RiskControlStore）全部可由业务方注册 Bean 全量替换，自动装配层对所有 Bean 加 `@ConditionalOnMissingBean`。
 
 ## 2. 模块结构
 
@@ -36,9 +37,9 @@ io.github.biglv666.authkit
 ├── context/                 # CurrentUserArgumentResolver
 ├── core/                    # AuthManager（核心逻辑）、AuthContext（ThreadLocal）、TokenResolver
 ├── crypto/                  # BCryptPasswordEncoderAdapter（spring-security-crypto 适配）
-├── dao/                     # SessionDao / AttemptStore SPI + 内存/Redis 各两套实现
+├── dao/                     # SessionDao / AttemptStore / RiskControlStore 的内存/Redis 实现
 ├── exception/               # NotLoginException(Reason) 等
-├── guard/                   # LoginAttemptGuard 防爆破
+├── guard/                   # LoginAttemptGuard 防爆破 + risk-control 策略/SPI
 ├── interceptor/             # AuthInterceptor + 注解解析缓存
 ├── management/              # 在线会话管理端点 + 静态令牌过滤器
 ├── model/                   # AuthSession / AuthUser / AuthMode / DeviceType

@@ -36,9 +36,22 @@ auth-kit:
     key-prefix: auth-kit               # Redis key 前缀；会话、墓碑、索引、防爆破计数统一使用
 
   guard:
+    mode: counter                      # counter（默认，固定窗口计数）| risk-control（滑动尝试窗口 + 递增风控）
     enabled: true                      # 防爆破开关（守卫 Bean 是否注入计数逻辑）
-    fail-max-attempts: 5               # 最大连续失败次数，达到即锁定；<=0 完全关闭
-    lock-duration: 15m                 # 锁定时长 = 计数窗口（固定窗口：窗口内累计，窗口过自动归零）
+    fail-max-attempts: 5               # counter：最大连续失败次数；risk-control：每个尝试窗口最大次数
+    lock-duration: 15m                 # counter 专用：锁定时长 = 计数窗口
+
+    # 以下仅 risk-control 模式生效
+    attempt-window: 5m                 # 滚动尝试窗口：窗口内最多尝试 fail-max-attempts 次
+    lockout-durations:                 # 连续风控升级档位，最后一档为封顶
+      - 5m
+      - 15m
+      - 1h
+      - 6h
+      - 24h
+    lockout-reset-interval: 6h         # 上一次风控结束后的静默期，超过则连续风控次数清零
+    state-ttl: 31h                     # 带风控历史的状态过期时间；实际 TTL 至少覆盖最长风控+静默期+窗口
+    reset-on-success: true             # 成功登录清空尝试窗口，不清连续风控次数
 
   safe:
     duration: 5m                       # 二级认证（@RequireSafe）通过后的免密窗口
@@ -87,10 +100,10 @@ auth-kit:
 | token.header-name / cookie-name / prefix | `TokenResolver`（拦截器提取 token） |
 | token.timeout / active-timeout / remember-timeout | `AuthManager`（登录与校验） |
 | token.mode / jwt-secret | 自动装配（`OpaqueTokenCodec` / `JwtTokenCodec`） |
-| session.store / key-prefix | 自动装配（SessionDao/AttemptStore/SafeStore 选择） |
+| session.store / key-prefix | 自动装配（SessionDao/AttemptStore/SafeStore/RiskControlStore 选择） |
 | session.max-sessions-per-device / device-max-sessions | `AuthManager.evictOverflowSessions` / `maxSessionsFor` |
 | session.kicked-out-message | web-common 异常适配器（BE_REPLACED 文案） |
-| guard.* | `LoginAttemptGuard`（计数 key 同样使用 `key-prefix`） |
+| guard.* | `LoginAttemptGuard`（counter / risk-control 两种模式，key 同样使用 `key-prefix`） |
 | safe.duration | `AuthManager`（`@RequireSafe` 免密窗口） |
 | whitelist | `AuthInterceptor`（AntPathMatcher） |
 | management.* | `ManagementConfig` / `ManagementTokenFilter` / `OnlineSessionController` |
@@ -154,6 +167,34 @@ public AttemptStore myAttemptStore() {
     return new MyAttemptStore();  // incr/get/clear 三方法，参考 RedisAttemptStore
 }
 ```
+
+### RiskControlStore（风控状态，risk-control 模式）
+
+```java
+@Bean
+public RiskControlStore myRiskControlStore() {
+    return new MyRiskControlStore();  // check/recordSuccess/clear；check 必须保证同 key 原子性
+}
+```
+
+## risk-control 模式语义
+
+`mode: risk-control` 下，窗口统计的是**所有尝试**，不是仅失败：
+
+1. `check(identifier)` 原子占用一次尝试额度；未达上限放行，达到上限直接触发/返回风控。
+2. 任意滚动 `attempt-window` 内最多 `fail-max-attempts` 次尝试，并发下也不会超限。
+3. 触发风控后，按连续风控次数选择 `lockout-durations` 档位；连续次数在
+   “上一次风控结束 + `lockout-reset-interval`” 内再次触发时递增，否则从第一档重新开始。
+4. 风控期间 `check` 一律拒绝，`LoginLockedException.remainingMillis` 返回真实剩余时间。
+5. 成功登录按 `reset-on-success` 清空尝试窗口；连续风控次数只由静默期或 `clear()` 重置。
+6. `recordFailure()` 在此模式下为 no-op（尝试已在 `check()` 中计数），现有三段式业务代码无需改动。
+
+状态 key 为 `{key-prefix}:risk:<identifier>`，与 counter 模式的
+`{key-prefix}:attempt:<identifier>` 隔离，切换模式不会出现 Redis 类型冲突。
+内存实现为单实例，会周期性清理过期状态并限制状态总数；Redis 实现使用单 key Lua 脚本保证原子性，
+要求各实例时钟同步。为降低随机用户名扫描造成的内存压力：未触发风控的普通尝试状态 TTL 为
+`max(2 × attempt-window, 1m)`，只有带风控历史的状态才使用 `state-ttl`。生产环境仍建议配合
+网关限流、Redis `maxmemory` 与监控。
 
 ### TokenGenerator（token 形态）
 
