@@ -174,7 +174,7 @@ curl -X DELETE -H "X-Auth-Kit-Token: 换成强随机串" \
 | 有 web-common | Result，code=40100（BE_REPLACED 用 `kicked-out-message` 文案） | Result，code=40300 | Result，code=40100 + 锁定文案 |
 | 无 web-common | HTTP 401 + `{code:401,message}` | HTTP 403 + `{code:403,message}` | HTTP 401 |
 
-前端凭 NotLoginException 的 reason 字段区分处理，对照表见 [README](../README.md#下线语义对照前端处理指南)。
+前端凭 NotLoginException 的 reason 字段区分处理，对照表见本文第 10 节。
 
 ## 5. 记住我
 
@@ -333,3 +333,39 @@ public OAuth2UserBinder oauth2UserBinder() {
 （LOGOUT / KICKED_OUT / FORCED_LOGOUT / REPLACED）。
 注意事件只覆盖**主动失效**（登出/踢人/顶号），会话自然过期与活跃超时**不发事件**
 （无人触发删除动作）；依赖事件做本地缓存的场景需容忍该窗口。
+
+## 10. 下线语义对照（前端处理指南）
+
+| reason | 场景 | 前端建议 |
+|---|---|---|
+| `NO_TOKEN` | 请求未携带 token | 跳转登录 |
+| `TOKEN_INVALID` | token 不存在/非法/被强制下线 | 跳转登录 |
+| `TOKEN_TIMEOUT` | 超过活跃超时 | 提示后跳转登录 |
+| `KICKED_OUT` | 管理员踢人 | 提示「已被强制下线」 |
+| `BE_REPLACED` | 同端新登录顶号 | 提示 `kicked-out-message` |
+
+## 11. 完整 API 速查
+
+```java
+// ── 登录态 ──
+AuthKit.login(Object userId)                          // 默认设备 PC，返回 token
+AuthKit.login(Object userId, DeviceType deviceType)   // 内置设备类型
+AuthKit.login(Object userId, String device)           // 自定义设备标识
+AuthKit.logout()                                      // 登出当前请求
+AuthKit.logout(String token)                          // 登出指定 token
+AuthKit.kickout(Object userId, String device)         // 踢人（device=null 全端），旧端收 KICKED_OUT
+AuthKit.kickout(Object userId, DeviceType deviceType)
+AuthKit.forceLogout(Object userId, String device)     // 强制下线（无墓碑）
+AuthKit.listSessions(Object userId, String device)    // 在线会话列表
+
+// ── 当前登录态（基于 ThreadLocal）──
+AuthKit.getLoginId() / getLoginIdAsLong() / isLogin()
+
+// ── 校验 ──
+AuthKit.checkLogin()                                  // 校验 + 活跃续期
+AuthKit.checkPermission(String permission)
+AuthKit.checkPermissions(List<String>, AuthMode)      // ALL / ANY
+AuthKit.checkRole(String role)
+AuthKit.checkRoles(List<String>, AuthMode)
+AuthKit.hasPermission(String) / hasRole(String)       // 布尔版，不抛异常
+```

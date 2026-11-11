@@ -2,6 +2,17 @@
 
 auth-kit 是「四件套」中的认证层。本文说明它与其他三个组件的组合方式，以及 PaperWise 真实项目的完整接入过程。
 
+## 0. 四件套关系速览
+
+| 组件 | 与 auth-kit 的关系 |
+|---|---|
+| web-common-spring-boot-starter | 鉴权异常自动映射 Result(40100/40300)，业务零 try-catch |
+| api-governance-spring-boot-starter | 管理端静态令牌同思路；治理日志可带 AuthContext 用户上下文 |
+| concurrent-guard | 幂等注解 + 登录态防重放组合范式 |
+| OutboxPro | 事件 payload 放 operatorId 的约定写法 |
+
+组合代码示例见下文各节。
+
 ## 1. 与 web-common 咬合：鉴权失败统一 Result
 
 类路径存在 web-common 时自动激活 `AuthKitWebCommonExceptionHandler`（优先级最高，业务零 try-catch）：
@@ -52,7 +63,7 @@ outboxService.publish(OrderCreatedEvent.builder()
 
 ## 5. 实战案例：PaperWise 从 JWT 迁移到 auth-kit
 
-[PaperWise](../../PaperWise)（学习卡片平台，Boot 3.5.14 / Java 17 / Redis + MySQL + MyBatis-Plus）原方案为 jjwt HS256 无状态 token。迁移总改动 **5 个文件**，业务 Controller 零改动。
+PaperWise（学习卡片平台，Boot 3.5.14 / Java 17 / Redis + MySQL + MyBatis-Plus）原方案为 jjwt HS256 无状态 token。迁移总改动 **5 个文件**，业务 Controller 零改动。
 
 ### 5.1 迁移前状态
 

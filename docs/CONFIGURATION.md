@@ -130,6 +130,14 @@ X-Auth-Kit-Token: {auth-token}
 
 ## 扩展点：注册 Bean 替换默认实现
 
+| SPI | 职责 | 默认实现 | 替换方式 |
+|---|---|---|---|
+| `SessionDao` | 会话存储 | Redis（自动）/内存（降级） | 注册同类型 Bean |
+| `AttemptStore` | 失败计数 | Redis（自动）/内存（降级） | 注册同类型 Bean |
+| `TokenGenerator` | token 形态 | SecureRandom 64 字符 | 注册同类型 Bean |
+| `PermissionProvider` | 权限数据源 | 无（业务必配） | 注册同类型 Bean |
+| `PasswordEncoder` | 密码编码 | BCrypt（需 security-crypto） | 注册同类型 Bean |
+
 所有默认实现都挂了 `@ConditionalOnMissingBean`，定义同类型 Bean 即全量替换：
 
 ### SessionDao（会话存储）
