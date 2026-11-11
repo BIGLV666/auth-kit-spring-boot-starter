@@ -1,5 +1,6 @@
 package io.github.biglv666.authkit.config;
 
+import io.github.biglv666.authkit.guard.GuardMode;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -175,12 +176,37 @@ public class AuthKitProperties {
 
     /** 登录防爆破配置 */
     public static class Guard {
+        /** 防爆破模式：counter（默认，固定窗口计数）/ risk-control（滑动尝试窗口 + 递增风控） */
+        private GuardMode mode = GuardMode.COUNTER;
         /** 防爆破开关（配合 LoginAttemptGuard 使用） */
         private boolean enabled = true;
-        /** 最大连续失败次数，超过即锁定；<=0 关闭 */
+        /** counter：最大连续失败次数；risk-control：每个尝试窗口允许的最大尝试次数；<=0 关闭 */
         private int failMaxAttempts = 5;
-        /** 锁定时长 */
+        /** counter 模式的锁定时长 = 计数窗口 */
         private Duration lockDuration = Duration.ofMinutes(15);
+        /** risk-control：滚动尝试窗口 */
+        private Duration attemptWindow = Duration.ofMinutes(5);
+        /** risk-control：连续风控的升级时长档位，最后一项为封顶 */
+        private List<Duration> lockoutDurations = new ArrayList<>(List.of(
+                Duration.ofMinutes(5),
+                Duration.ofMinutes(15),
+                Duration.ofHours(1),
+                Duration.ofHours(6),
+                Duration.ofHours(24)));
+        /** risk-control：上一次风控结束后的静默期，超过则连续风控次数清零 */
+        private Duration lockoutResetInterval = Duration.ofHours(6);
+        /** risk-control：带风控历史的状态过期时间（普通尝试状态使用更短的 TTL） */
+        private Duration stateTtl = Duration.ofHours(31);
+        /** risk-control：登录成功是否清空尝试窗口（不清连续风控次数） */
+        private boolean resetOnSuccess = true;
+
+        public GuardMode getMode() {
+            return mode;
+        }
+
+        public void setMode(GuardMode mode) {
+            this.mode = mode;
+        }
 
         public boolean isEnabled() {
             return enabled;
@@ -204,6 +230,46 @@ public class AuthKitProperties {
 
         public void setLockDuration(Duration lockDuration) {
             this.lockDuration = lockDuration;
+        }
+
+        public Duration getAttemptWindow() {
+            return attemptWindow;
+        }
+
+        public void setAttemptWindow(Duration attemptWindow) {
+            this.attemptWindow = attemptWindow;
+        }
+
+        public List<Duration> getLockoutDurations() {
+            return lockoutDurations;
+        }
+
+        public void setLockoutDurations(List<Duration> lockoutDurations) {
+            this.lockoutDurations = lockoutDurations;
+        }
+
+        public Duration getLockoutResetInterval() {
+            return lockoutResetInterval;
+        }
+
+        public void setLockoutResetInterval(Duration lockoutResetInterval) {
+            this.lockoutResetInterval = lockoutResetInterval;
+        }
+
+        public Duration getStateTtl() {
+            return stateTtl;
+        }
+
+        public void setStateTtl(Duration stateTtl) {
+            this.stateTtl = stateTtl;
+        }
+
+        public boolean isResetOnSuccess() {
+            return resetOnSuccess;
+        }
+
+        public void setResetOnSuccess(boolean resetOnSuccess) {
+            this.resetOnSuccess = resetOnSuccess;
         }
     }
 

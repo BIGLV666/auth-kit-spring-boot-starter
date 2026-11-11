@@ -7,14 +7,19 @@ import io.github.biglv666.authkit.core.TokenResolver;
 import io.github.biglv666.authkit.crypto.BCryptPasswordEncoderAdapter;
 import io.github.biglv666.authkit.dao.AttemptStore;
 import io.github.biglv666.authkit.dao.InMemoryAttemptStore;
+import io.github.biglv666.authkit.dao.InMemoryRiskControlStore;
 import io.github.biglv666.authkit.dao.InMemorySafeStore;
 import io.github.biglv666.authkit.dao.InMemorySessionDao;
 import io.github.biglv666.authkit.dao.RedisAttemptStore;
+import io.github.biglv666.authkit.dao.RedisRiskControlStore;
 import io.github.biglv666.authkit.dao.RedisSafeStore;
 import io.github.biglv666.authkit.dao.RedisSessionDao;
 import io.github.biglv666.authkit.dao.SafeStore;
 import io.github.biglv666.authkit.dao.SessionDao;
+import io.github.biglv666.authkit.guard.GuardMode;
 import io.github.biglv666.authkit.guard.LoginAttemptGuard;
+import io.github.biglv666.authkit.guard.RiskControlPolicy;
+import io.github.biglv666.authkit.guard.RiskControlStore;
 import io.github.biglv666.authkit.interceptor.AuthInterceptor;
 import io.github.biglv666.authkit.management.ManagementTokenFilter;
 import io.github.biglv666.authkit.management.OnlineSessionController;
@@ -58,10 +63,14 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * auth-kit 自动装配入口。
  * <p>装配原则：所有 Bean {@code @ConditionalOnMissingBean}，业务方可全量替换任意一层
- * （SessionDao / AttemptStore / TokenGenerator / PermissionProvider / PasswordEncoder）。</p>
+ * （SessionDao / AttemptStore / RiskControlStore / TokenGenerator / PermissionProvider / PasswordEncoder）。</p>
  */
 @AutoConfiguration
 @ConditionalOnProperty(prefix = "auth-kit", name = "enabled", matchIfMissing = true)
@@ -118,6 +127,29 @@ public class AuthKitAutoConfiguration {
             throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
         }
         return new InMemoryAttemptStore();
+    }
+
+    /** 风控状态存储（risk-control 模式使用）：选择逻辑同会话存储；注册同类型 Bean 可全量替换 */
+    @Bean
+    @ConditionalOnMissingBean(RiskControlStore.class)
+    public RiskControlStore riskControlStore(AuthKitProperties properties,
+                                             ObjectProvider<RedisConnectionFactory> factoryProvider) {
+        boolean riskStoreRequired = properties.getGuard().getMode() == GuardMode.RISK_CONTROL
+                && properties.isGuardEnabled()
+                && properties.getFailMaxAttempts() > 0;
+        String store = properties.getStore();
+        if ("memory".equals(store)) {
+            return new InMemoryRiskControlStore();
+        }
+        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+        if (factory != null) {
+            return new RedisRiskControlStore(new StringRedisTemplate(factory));
+        }
+        // 只有 risk-control 模式且守卫真正启用时该 Bean 才被使用，不能因 store=redis 缺 Redis 破坏其他场景启动
+        if (riskStoreRequired && "redis".equals(store)) {
+            throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
+        }
+        return new InMemoryRiskControlStore();
     }
 
     /** 二级认证状态存储：选择逻辑同会话存储 */
@@ -212,12 +244,50 @@ public class AuthKitAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public LoginAttemptGuard loginAttemptGuard(AttemptStore attemptStore, AuthKitProperties properties) {
-        // guard.enabled=false 时把阈值置 0，守卫自身即完全停用
+    public LoginAttemptGuard loginAttemptGuard(AttemptStore attemptStore,
+                                               RiskControlStore riskControlStore,
+                                               AuthKitProperties properties) {
+        if (properties.getGuard().getMode() == GuardMode.RISK_CONTROL) {
+            RiskControlPolicy policy = riskControlPolicy(properties);
+            boolean enabled = properties.isGuardEnabled() && policy.maxAttempts() > 0;
+            return new LoginAttemptGuard(riskControlStore, policy, properties.getKeyPrefix(), enabled);
+        }
+        // counter 模式：guard.enabled=false 时把阈值置 0，守卫自身即完全停用
         int maxAttempts = properties.isGuardEnabled() ? properties.getFailMaxAttempts() : 0;
         return new LoginAttemptGuard(attemptStore,
                 maxAttempts, properties.getLockDuration().toMillis(),
                 properties.getKeyPrefix());
+    }
+
+    private RiskControlPolicy riskControlPolicy(AuthKitProperties properties) {
+        AuthKitProperties.Guard guard = properties.getGuard();
+        requireConfigured(guard.getAttemptWindow(), "attempt-window");
+        requireConfigured(guard.getLockoutResetInterval(), "lockout-reset-interval");
+        requireConfigured(guard.getStateTtl(), "state-ttl");
+
+        List<Duration> configured = guard.getLockoutDurations();
+        List<Long> durations = new ArrayList<>();
+        if (configured != null) {
+            for (Duration duration : configured) {
+                if (duration == null) {
+                    throw new IllegalArgumentException("auth-kit.guard.lockout-durations 不能包含空值");
+                }
+                durations.add(duration.toMillis());
+            }
+        }
+        return new RiskControlPolicy(
+                guard.getAttemptWindow().toMillis(),
+                guard.getFailMaxAttempts(),
+                durations,
+                guard.getLockoutResetInterval().toMillis(),
+                guard.getStateTtl().toMillis(),
+                guard.isResetOnSuccess());
+    }
+
+    private static void requireConfigured(Duration value, String name) {
+        if (value == null) {
+            throw new IllegalArgumentException("auth-kit.guard." + name + " 不能为空");
+        }
     }
 
     // ── 异常映射：有 web-common 用 Result，否则原生 401/403 ──
