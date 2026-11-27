@@ -63,8 +63,10 @@ class AuthKitLoadTest {
             dao = new InMemorySessionDao();
         }
 
+        // 会话绝对有效期必须长于压测时长：否则 30 分钟长稳会在末尾自然过期，
+        // 被误计为认证错误（这不是产品缺陷）。
         AuthManager manager = new AuthManager(dao, new RandomTokenGenerator(64),
-                30 * 60_000L, 0, -1);
+                2 * 60 * 60_000L, 0, -1);
 
         try {
             runPhase(manager, threads, warmupSeconds, true, "warmup");
@@ -166,6 +168,9 @@ class AuthKitLoadTest {
                     ops.increment();
                 } catch (io.github.biglv666.authkit.exception.NotLoginException e) {
                     authErrors.incrementAndGet();
+                    if (authErrors.get() <= 5) {
+                        System.err.println("unexpected auth error: " + e.getReason());
+                    }
                 } catch (RuntimeException e) {
                     unexpectedErrors.incrementAndGet();
                 }
