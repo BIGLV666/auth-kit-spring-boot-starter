@@ -86,4 +86,17 @@ public interface SessionDao {
      * @param device 设备标识；null 表示全部设备
      */
     Set<String> getUserTokens(String userId, String device);
+
+    /**
+     * 在 userId + device 维度执行互斥操作，用于并发登录时把「写反查索引 + 顶号驱逐」原子化。
+     *
+     * <p>默认实现是进程内粗粒度锁，只保证单实例正确；分布式部署时，
+     * 实现方应覆盖为分布式锁（{@link RedisSessionDao} 已实现基于 Redis 的锁）。
+     * 锁获取失败不应阻断登录，实现方可降级为无锁执行并记录告警。</p>
+     */
+    default void runExclusive(String userId, String device, Runnable action) {
+        synchronized (this) {
+            action.run();
+        }
+    }
 }

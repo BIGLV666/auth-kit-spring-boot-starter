@@ -27,6 +27,8 @@ public class InMemorySessionDao implements SessionDao {
     private final ConcurrentHashMap<String, KickEntry> kickMarks = new ConcurrentHashMap<>();
     /** 反查索引：key = userId + ":" + device，value = token → 预期过期时间戳 */
     private final ConcurrentHashMap<String, Map<String, Long>> userIndex = new ConcurrentHashMap<>();
+    /** 登录互斥锁：userId|device → 锁对象；仅单实例语义 */
+    private final ConcurrentHashMap<String, Object> loginLocks = new ConcurrentHashMap<>();
     private final LongSupplier clock;
 
     public InMemorySessionDao() {
@@ -136,6 +138,15 @@ public class InMemorySessionDao implements SessionDao {
             });
         }
         return result;
+    }
+
+    @Override
+    public void runExclusive(String userId, String device, Runnable action) {
+        // 按用户+设备分锁，避免全局锁拖慢不同用户的登录
+        Object lock = loginLocks.computeIfAbsent(indexKey(userId, device), k -> new Object());
+        synchronized (lock) {
+            action.run();
+        }
     }
 
     private String indexKey(String userId, String device) {

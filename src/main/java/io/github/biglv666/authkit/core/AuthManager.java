@@ -207,8 +207,12 @@ public class AuthManager {
         TokenCodec codec = tokenCodec;
         String credential = codec.issue(session, randomToken);
         // 索引与墓碑作用于"下发的凭证"，保证踢人/顶号在两种凭证模式下语义一致
-        sessionDao.addToUserIndex(uid, device, credential, now + ttl);
-        evictOverflowSessions(uid, device, credential);
+        // 同一用户+设备的「写索引 + 顶号驱逐」必须串行：并发登录时若交错执行，
+        // 会互相驱逐对方的会话，极端情况下一个有效会话都不剩。
+        sessionDao.runExclusive(uid, device, () -> {
+            sessionDao.addToUserIndex(uid, device, credential, now + ttl);
+            evictOverflowSessions(uid, device, credential);
+        });
         publishAudit(AuthKitAuditEvent.Action.LOGIN_SUCCESS, uid, device, null);
         return credential;
     }

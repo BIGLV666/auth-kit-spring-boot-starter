@@ -2,16 +2,21 @@ package io.github.biglv666.authkit.dao;
 
 import io.github.biglv666.authkit.exception.NotLoginReason;
 import io.github.biglv666.authkit.model.AuthSession;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 基于 Redis 的会话存储实现（生产默认）。
@@ -25,6 +30,7 @@ import java.util.Set;
  */
 public class RedisSessionDao implements SessionDao {
 
+    private static final Logger log = LoggerFactory.getLogger(RedisSessionDao.class);
     private static final String TOKEN_KEY = ":token:";
     private static final String KICK_KEY = ":kick:";
     private static final String USER_KEY = ":user:";
@@ -38,6 +44,16 @@ public class RedisSessionDao implements SessionDao {
     private static final RedisScript<Long> TOUCH_LAST_ACTIVE_SCRIPT = new DefaultRedisScript<>(
             "if redis.call('exists', KEYS[1]) == 1 then "
                     + "redis.call('hset', KEYS[1], 'lastActiveTime', ARGV[1]); return 1 end return 0",
+            Long.class);
+
+    private static final String LOGIN_LOCK_KEY = ":lock:login:";
+    private static final long LOGIN_LOCK_TTL_MILLIS = 5_000;
+    private static final long LOGIN_LOCK_WAIT_MILLIS = 3_000;
+
+    /** 仅释放自己持有的锁，避免 TTL 过期后误删别人的锁 */
+    private static final RedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                    + "return redis.call('del', KEYS[1]) else return 0 end",
             Long.class);
 
     private final StringRedisTemplate redis;
@@ -165,6 +181,48 @@ public class RedisSessionDao implements SessionDao {
             }
         }
         return tokens;
+    }
+
+    /**
+     * 分布式登录互斥：同一 userId + device 的「写索引 + 顶号驱逐」串行执行，
+     * 防止并发登录互相驱逐导致最终没有任何有效会话。
+     * <p>Redis 锁 TTL 5s，等待上限 3s；获取超时降级为无锁执行（可用性优先），并记录告警。</p>
+     */
+    @Override
+    public void runExclusive(String userId, String device, Runnable action) {
+        String key = prefix + LOGIN_LOCK_KEY + userId + INDEX_SEPARATOR
+                + Objects.requireNonNullElse(device, "");
+        String owner = UUID.randomUUID().toString();
+        long deadline = System.currentTimeMillis() + LOGIN_LOCK_WAIT_MILLIS;
+        boolean acquired = false;
+        while (System.currentTimeMillis() < deadline) {
+            Boolean ok = redis.opsForValue()
+                    .setIfAbsent(key, owner, Duration.ofMillis(LOGIN_LOCK_TTL_MILLIS));
+            if (Boolean.TRUE.equals(ok)) {
+                acquired = true;
+                break;
+            }
+            try {
+                Thread.sleep(10L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        if (!acquired) {
+            log.warn("[auth-kit] 获取登录互斥锁超时，降级为无锁执行 userId={}", userId);
+        }
+        try {
+            action.run();
+        } finally {
+            if (acquired) {
+                try {
+                    redis.execute(UNLOCK_SCRIPT, List.of(key), owner);
+                } catch (Exception e) {
+                    log.warn("[auth-kit] 释放登录互斥锁失败: {}", e.getClass().getSimpleName());
+                }
+            }
+        }
     }
 
     private String indexMember(String device, String token) {
