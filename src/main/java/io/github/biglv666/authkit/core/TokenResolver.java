@@ -38,7 +38,10 @@ public class TokenResolver {
         if (value == null || value.isBlank()) {
             value = resolveFromCookie(request);
         }
+        // 仅 GET 读取查询参数：SSE/EventSource 是 GET；避免 POST 表单被顺带解析，
+        // 也避免非流式接口使用 query token 扩大泄露面。
         if ((value == null || value.isBlank())
+                && "GET".equalsIgnoreCase(request.getMethod())
                 && queryParameterName != null && !queryParameterName.isBlank()) {
             value = request.getParameter(queryParameterName);
         }

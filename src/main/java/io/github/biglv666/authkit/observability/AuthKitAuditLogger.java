@@ -4,7 +4,6 @@ import io.github.biglv666.authkit.event.AuthKitAuditEvent;
 import io.github.biglv666.authkit.event.AuthKitSessionEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.event.EventListener;
 
 /**
  * 默认审计日志实现：把认证审计/会话事件写到独立 logger（{@code auth-kit.audit}），
@@ -17,7 +16,6 @@ public class AuthKitAuditLogger {
 
     private static final Logger log = LoggerFactory.getLogger("auth-kit.audit");
 
-    @EventListener
     public void onAudit(AuthKitAuditEvent event) {
         if (event == null) {
             return;
@@ -26,7 +24,6 @@ public class AuthKitAuditLogger {
                 event.getAction(), event.getIdentifier(), event.getDevice(), event.getReason());
     }
 
-    @EventListener
     public void onSession(AuthKitSessionEvent event) {
         if (event == null) {
             return;

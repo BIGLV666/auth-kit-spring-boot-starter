@@ -34,9 +34,9 @@ class AuthKitHealthIndicatorTest {
     }
 
     @Test
-    void customStoreIsUpWithoutProbe() {
+    void customStoreIsUnknownWithoutProbe() {
         Health health = new AuthKitHealthIndicator(mock(SessionDao.class), false, null).health();
-        assertEquals(Status.UP, health.getStatus());
+        assertEquals(Status.UNKNOWN, health.getStatus());
         assertEquals("custom", health.getDetails().get("store"));
     }
 }

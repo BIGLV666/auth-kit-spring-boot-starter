@@ -51,7 +51,6 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
@@ -199,7 +198,14 @@ public class AuthKitAutoConfiguration {
         @Bean
         @ConditionalOnMissingBean(RiskControlStore.class)
         public RiskControlStore riskControlStore(AuthKitProperties properties) {
-            failIfRedisRequired(properties);
+            // 与 RedisAwareStorageConfig 保持一致：只有 risk-control 真正启用且 store=redis 才失败，
+            // 其他场景允许内存降级（不影响 counter 模式/自定义存储）。
+            boolean riskStoreRequired = properties.getGuard().getMode() == GuardMode.RISK_CONTROL
+                    && properties.isGuardEnabled() && properties.getFailMaxAttempts() > 0;
+            if (riskStoreRequired && "redis".equals(properties.getStore())) {
+                throw new IllegalStateException(
+                        "auth-kit.guard.mode=risk-control 且 store=redis，但类路径缺少 spring-data-redis");
+            }
             return new InMemoryRiskControlStore();
         }
 
@@ -465,19 +471,45 @@ public class AuthKitAutoConfiguration {
      * <p>使用 addEventListener/addAuditListener，允许 SSO、指标、审计日志各自监听、互不覆盖。</p>
      */
     @Bean
-    public InitializingBean authKitEventBridge(AuthManager authManager,
-                                               ObjectProvider<LoginAttemptGuard> guardProvider,
-                                               ObjectProvider<ApplicationEventPublisher> publisherProvider) {
+    public InitializingBean authKitEventBridge(
+            AuthManager authManager,
+            ObjectProvider<LoginAttemptGuard> guardProvider,
+            ObjectProvider<io.github.biglv666.authkit.observability.AuthKitMetrics> metricsProvider,
+            ObjectProvider<io.github.biglv666.authkit.observability.AuthKitAuditLogger> auditLoggerProvider,
+            ObjectProvider<ApplicationEventPublisher> publisherProvider) {
         return () -> {
-            ApplicationEventPublisher publisher = publisherProvider.getIfAvailable();
-            if (publisher == null) {
-                return;
-            }
-            authManager.addEventListener(publisher::publishEvent);
-            authManager.addAuditListener(publisher::publishEvent);
             LoginAttemptGuard guard = guardProvider.getIfAvailable();
-            if (guard != null) {
-                guard.setAuditListener(publisher::publishEvent);
+            io.github.biglv666.authkit.observability.AuthKitMetrics metrics =
+                    metricsProvider.getIfAvailable();
+            io.github.biglv666.authkit.observability.AuthKitAuditLogger auditLogger =
+                    auditLoggerProvider.getIfAvailable();
+
+            // 指标/审计日志直接注册为监听器：监听器之间互相隔离，
+            // 不依赖 Spring 事件多播（默认 multicaster 遇到第一个异常会中断后续监听器）。
+            if (metrics != null) {
+                authManager.addAuditListener(metrics::onAudit);
+                authManager.addEventListener(metrics::onSession);
+                if (guard != null) {
+                    guard.addAuditListener(metrics::onAudit);
+                }
+            }
+            if (auditLogger != null) {
+                authManager.addAuditListener(auditLogger::onAudit);
+                authManager.addEventListener(auditLogger::onSession);
+                if (guard != null) {
+                    guard.addAuditListener(auditLogger::onAudit);
+                }
+            }
+
+            // Spring 事件最后注册：业务 @EventListener 仍可订阅；即使它抛异常，
+            // 上面的指标/审计监听器已经执行完毕。
+            ApplicationEventPublisher publisher = publisherProvider.getIfAvailable();
+            if (publisher != null) {
+                authManager.addEventListener(publisher::publishEvent);
+                authManager.addAuditListener(publisher::publishEvent);
+                if (guard != null) {
+                    guard.addAuditListener(publisher::publishEvent);
+                }
             }
         };
     }
@@ -486,16 +518,21 @@ public class AuthKitAutoConfiguration {
 
     @Configuration(proxyBeanMethods = false)
     @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
-    @ConditionalOnBean(io.micrometer.core.instrument.MeterRegistry.class)
     static class MetricsConfig {
 
+        /**
+         * 不使用 {@code @ConditionalOnBean}：自动配置按类名排序，本组件可能先于
+         * Micrometer 的 MetricsAutoConfiguration 评估，导致指标永远不注册。
+         * 改为运行时取 ObjectProvider，缺 MeterRegistry 时退化为 no-op。
+         */
         @Bean
         @ConditionalOnMissingBean
         @ConditionalOnProperty(prefix = "auth-kit.observability", name = "metrics",
                 havingValue = "true", matchIfMissing = true)
         public io.github.biglv666.authkit.observability.AuthKitMetrics authKitMetrics(
-                io.micrometer.core.instrument.MeterRegistry registry) {
-            return new io.github.biglv666.authkit.observability.AuthKitMetrics(registry);
+                ObjectProvider<io.micrometer.core.instrument.MeterRegistry> registryProvider) {
+            return new io.github.biglv666.authkit.observability.AuthKitMetrics(
+                    registryProvider.getIfAvailable());
         }
     }
 
@@ -516,11 +553,23 @@ public class AuthKitAutoConfiguration {
                     ObjectProvider<RedisConnectionFactory> factoryProvider,
                     AuthKitProperties properties) {
                 RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+                java.util.function.Supplier<org.springframework.boot.actuate.health.Health> probe;
+                if (factory != null) {
+                    probe = new io.github.biglv666.authkit.observability.RedisHealthProbe(factory);
+                } else if (!"memory".equals(properties.getStore())) {
+                    // spring-data-redis 在类路径但容器没有 Redis 连接工厂：
+                    // auto 会静默降级内存，生产多实例下这是严重问题，健康检查必须报 DOWN。
+                    probe = () -> org.springframework.boot.actuate.health.Health.down()
+                            .withDetail("store", "redis")
+                            .withDetail("error", "RedisConnectionFactory missing")
+                            .build();
+                } else {
+                    probe = null;
+                }
                 return new io.github.biglv666.authkit.observability.AuthKitHealthIndicator(
                         sessionDao,
                         properties.getObservability().isMemoryStoreHealthUp(),
-                        factory == null ? null
-                                : new io.github.biglv666.authkit.observability.RedisHealthProbe(factory));
+                        probe);
             }
         }
 

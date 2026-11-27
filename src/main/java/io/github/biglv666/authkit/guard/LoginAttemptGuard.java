@@ -4,6 +4,8 @@ import io.github.biglv666.authkit.dao.AttemptStore;
 import io.github.biglv666.authkit.event.AuthKitAuditEvent;
 import io.github.biglv666.authkit.exception.LoginLockedException;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
@@ -35,8 +37,8 @@ public class LoginAttemptGuard {
     private final String keyPrefix;
     private final boolean enabled;
     private final LongSupplier clock;
-    /** 认证审计监听（登录失败/锁定）；异常不得影响主流程 */
-    private volatile Consumer<AuthKitAuditEvent> auditListener;
+    /** 认证审计监听（登录失败/锁定）；支持多个监听器，单个异常不得影响其他监听器或主流程 */
+    private final List<Consumer<AuthKitAuditEvent>> auditListeners = new CopyOnWriteArrayList<>();
 
     public LoginAttemptGuard(AttemptStore attemptStore, int failMaxAttempts, long lockDurationMillis) {
         this(attemptStore, failMaxAttempts, lockDurationMillis, DEFAULT_KEY_PREFIX);
@@ -84,20 +86,32 @@ public class LoginAttemptGuard {
         return enabled;
     }
 
-    /** 注册认证审计监听（自动装配接入 Spring 事件广播/指标/审计日志） */
+    /** 覆盖认证审计监听（单监听器语义） */
     public void setAuditListener(Consumer<AuthKitAuditEvent> auditListener) {
-        this.auditListener = auditListener;
+        auditListeners.clear();
+        if (auditListener != null) {
+            auditListeners.add(auditListener);
+        }
+    }
+
+    /** 追加认证审计监听（自动装配接入指标/审计日志/Spring 事件，互不覆盖） */
+    public void addAuditListener(Consumer<AuthKitAuditEvent> auditListener) {
+        if (auditListener != null) {
+            auditListeners.add(auditListener);
+        }
     }
 
     private void publishAudit(AuthKitAuditEvent.Action action, String identifier, String reason) {
-        Consumer<AuthKitAuditEvent> listener = auditListener;
-        if (listener == null) {
+        if (auditListeners.isEmpty()) {
             return;
         }
-        try {
-            listener.accept(new AuthKitAuditEvent(action, identifier, null, reason));
-        } catch (Exception ignored) {
-            // 监听器异常不得影响主流程
+        AuthKitAuditEvent event = new AuthKitAuditEvent(action, identifier, null, reason);
+        for (Consumer<AuthKitAuditEvent> listener : auditListeners) {
+            try {
+                listener.accept(event);
+            } catch (Exception ignored) {
+                // 单个监听器异常不得影响其他监听器或主流程
+            }
         }
     }
 

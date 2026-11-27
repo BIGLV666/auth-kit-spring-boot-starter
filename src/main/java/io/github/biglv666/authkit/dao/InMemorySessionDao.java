@@ -27,8 +27,9 @@ public class InMemorySessionDao implements SessionDao {
     private final ConcurrentHashMap<String, KickEntry> kickMarks = new ConcurrentHashMap<>();
     /** 反查索引：key = userId + ":" + device，value = token → 预期过期时间戳 */
     private final ConcurrentHashMap<String, Map<String, Long>> userIndex = new ConcurrentHashMap<>();
-    /** 登录互斥锁：userId|device → 锁对象；仅单实例语义 */
-    private final ConcurrentHashMap<String, Object> loginLocks = new ConcurrentHashMap<>();
+    /** 登录互斥锁（固定条带，避免按用户无限增长）；仅单实例语义 */
+    private static final int LOGIN_LOCK_STRIPES = 64;
+    private final Object[] loginLocks = new Object[LOGIN_LOCK_STRIPES];
     private final LongSupplier clock;
 
     public InMemorySessionDao() {
@@ -38,6 +39,9 @@ public class InMemorySessionDao implements SessionDao {
     /** 允许注入时间源，供测试模拟时间推进 */
     public InMemorySessionDao(LongSupplier clock) {
         this.clock = clock;
+        for (int i = 0; i < loginLocks.length; i++) {
+            loginLocks[i] = new Object();
+        }
     }
 
     @Override
@@ -142,8 +146,8 @@ public class InMemorySessionDao implements SessionDao {
 
     @Override
     public void runExclusive(String userId, String device, Runnable action) {
-        // 按用户+设备分锁，避免全局锁拖慢不同用户的登录
-        Object lock = loginLocks.computeIfAbsent(indexKey(userId, device), k -> new Object());
+        // 固定条带锁：不同用户/设备大多落在不同锁上；不会随用户数增长而泄漏锁对象
+        Object lock = loginLocks[Math.floorMod(indexKey(userId, device).hashCode(), loginLocks.length)];
         synchronized (lock) {
             action.run();
         }

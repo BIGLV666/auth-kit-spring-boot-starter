@@ -209,10 +209,16 @@ public class AuthManager {
         // 索引与墓碑作用于"下发的凭证"，保证踢人/顶号在两种凭证模式下语义一致
         // 同一用户+设备的「写索引 + 顶号驱逐」必须串行：并发登录时若交错执行，
         // 会互相驱逐对方的会话，极端情况下一个有效会话都不剩。
+        // 事件发布必须放在锁外：监听器可能做远程调用，慢监听器会让锁过期、破坏互斥。
+        List<AuthSession> evicted = new ArrayList<>();
         sessionDao.runExclusive(uid, device, () -> {
             sessionDao.addToUserIndex(uid, device, credential, now + ttl);
-            evictOverflowSessions(uid, device, credential);
+            evicted.addAll(evictOverflowSessions(uid, device, credential));
         });
+        for (AuthSession evictedSession : evicted) {
+            publishEvent(evictedSession.getUserId(), evictedSession.getToken(),
+                    AuthKitSessionEvent.Action.REPLACED);
+        }
         publishAudit(AuthKitAuditEvent.Action.LOGIN_SUCCESS, uid, device, null);
         return credential;
     }
@@ -221,10 +227,11 @@ public class AuthManager {
      * 顶号超额会话：保留最新的 maxSessionsPerDevice 个旧会话（新凭证恒保留），
      * 超额的按登录时间从旧到新标记"被顶下线"。
      */
-    private void evictOverflowSessions(String userId, String device, String currentCredential) {
+    private List<AuthSession> evictOverflowSessions(String userId, String device, String currentCredential) {
+        List<AuthSession> evicted = new ArrayList<>();
         int max = maxSessionsFor(device);
         if (max < 0) {
-            return;
+            return evicted;
         }
         TokenCodec codec = tokenCodec;
         List<AuthSession> sessions = new ArrayList<>();
@@ -243,15 +250,15 @@ public class AuthManager {
             }
         }
         if (sessions.size() < max) {
-            return;
+            return evicted;
         }
         sessions.sort(Comparator.comparingLong(AuthSession::getLoginTime));
         int excess = sessions.size() - max + 1;
         for (int i = 0; i < excess; i++) {
             evictSession(sessions.get(i), NotLoginReason.BE_REPLACED);
-            publishEvent(sessions.get(i).getUserId(), sessions.get(i).getToken(),
-                    io.github.biglv666.authkit.event.AuthKitSessionEvent.Action.REPLACED);
+            evicted.add(sessions.get(i));
         }
+        return evicted;
     }
 
     /** 会话上限：按设备覆盖优先，其次全局值 */

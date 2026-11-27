@@ -65,4 +65,33 @@ class ManagementTokenFilterTest {
 
         assertEquals(401, response.getStatus(), "存在 context-path 时也必须命中管理端点");
     }
+
+    @Test
+    void pathParametersCannotBypassManagementAuth() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "DELETE", "/auth-kit;x=1/online/10001");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertEquals(401, response.getStatus(),
+                "路径参数（;x=1）不能绕过管理端点鉴权");
+        assertNull(chain.getRequest());
+    }
+
+    @Test
+    void sessionIdPathParameterCannotBypassWithContextPath() throws Exception {
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/app/auth-kit;jsessionid=abc/online");
+        request.setContextPath("/app");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter.doFilter(request, response, chain);
+
+        assertEquals(401, response.getStatus(),
+                "jsessionid 路径参数不能绕过管理端点鉴权");
+        assertNull(chain.getRequest());
+    }
 }

@@ -32,8 +32,8 @@ class TokenResolverTest {
     }
 
     @Test
-    void queryParameterUsedOnlyWhenConfigured() {
-        MockHttpServletRequest request = new MockHttpServletRequest();
+    void queryParameterUsedOnlyWhenConfiguredAndOnlyForGet() {
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/stream");
         request.setParameter("access_token", "query-token");
 
         assertNull(new TokenResolver(HEADER, "", "Bearer").resolve(request),
@@ -41,6 +41,11 @@ class TokenResolverTest {
 
         assertEquals("query-token",
                 new TokenResolver(HEADER, "", "Bearer", "access_token").resolve(request));
+
+        MockHttpServletRequest post = new MockHttpServletRequest("POST", "/api/order");
+        post.setParameter("access_token", "query-token");
+        assertNull(new TokenResolver(HEADER, "", "Bearer", "access_token").resolve(post),
+                "query token 仅用于 GET/SSE，不得从 POST 表单读取");
     }
 
     @Test

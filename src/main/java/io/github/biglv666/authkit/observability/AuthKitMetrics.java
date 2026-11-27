@@ -4,13 +4,13 @@ import io.github.biglv666.authkit.event.AuthKitAuditEvent;
 import io.github.biglv666.authkit.event.AuthKitSessionEvent;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.springframework.context.event.EventListener;
 
 /**
  * auth-kit 指标采集（Micrometer，可选依赖）。
  *
  * <p>标签全部是有界枚举，<b>不使用 userId / token 等高基数值</b>，避免指标基数爆炸。
- * 通过 Spring 事件监听消费，不侵入认证主链路；监听异常由事件广播隔离。</p>
+ * 由自动装配直接注册到 {@code AuthManager}/{@code LoginAttemptGuard} 的监听列表，
+ * 不依赖 Spring 事件多播；每个监听器独立 try/catch，互不影响。</p>
  *
  * <ul>
  *   <li>{@code authkit.login{outcome=success|failure|locked_out}}</li>
@@ -26,13 +26,16 @@ public class AuthKitMetrics {
 
     private final MeterRegistry registry;
 
+    /**
+     * @param registry Micrometer 注册表；为 null 时本实例退化为 no-op
+     *                 （保证没有 Micrometer 的应用也能安全装配，不影响认证主流程）
+     */
     public AuthKitMetrics(MeterRegistry registry) {
         this.registry = registry;
     }
 
-    @EventListener
     public void onAudit(AuthKitAuditEvent event) {
-        if (event == null || event.getAction() == null) {
+        if (registry == null || event == null || event.getAction() == null) {
             return;
         }
         String outcome = switch (event.getAction()) {
@@ -53,9 +56,8 @@ public class AuthKitMetrics {
         }
     }
 
-    @EventListener
     public void onSession(AuthKitSessionEvent event) {
-        if (event == null || event.getAction() == null) {
+        if (registry == null || event == null || event.getAction() == null) {
             return;
         }
         Counter.builder(SESSION_EVENT_METRIC)

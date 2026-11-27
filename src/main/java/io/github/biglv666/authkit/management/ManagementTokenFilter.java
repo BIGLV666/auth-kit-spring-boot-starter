@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.UrlPathHelper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -88,15 +89,12 @@ public class ManagementTokenFilter extends OncePerRequestFilter {
     }
 
     /**
-     * 判断请求是否落在管理端点下：去掉 context-path 后按路径段边界匹配，
-     * 避免 base-path=/auth-kit 时误伤 /auth-kit-xxx 之类的业务路径。
+     * 判断请求是否落在管理端点下：用 Spring 的 {@link UrlPathHelper} 归一化路径
+     * （去 context-path、去解码、去 {@code ;jsessionid}/{@code ;x=1} 路径参数），
+     * 避免原始 URI 保留路径参数导致绕过过滤器、而 MVC 仍能匹配到管理端点。
      */
     private boolean isManagementPath(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        String contextPath = request.getContextPath();
-        String path = (contextPath != null && !contextPath.isEmpty() && uri.startsWith(contextPath))
-                ? uri.substring(contextPath.length())
-                : uri;
+        String path = UrlPathHelper.defaultInstance.getPathWithinApplication(request);
         String base = basePath.endsWith("/") && basePath.length() > 1
                 ? basePath.substring(0, basePath.length() - 1)
                 : basePath;

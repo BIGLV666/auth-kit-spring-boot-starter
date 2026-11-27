@@ -38,8 +38,10 @@ public class AuthKitHealthIndicator implements HealthIndicator {
                     .withDetail("warning", "内存会话仅适合本地开发/单实例，生产必须使用 Redis")
                     .build();
         }
-        return Health.up()
+        // 自定义 SessionDao 无法探测：不要谎报 UP，交给运维判断
+        return Health.unknown()
                 .withDetail("store", "custom")
+                .withDetail("warning", "自定义 SessionDao 未被探测，请自行确保其可用性")
                 .build();
     }
 }

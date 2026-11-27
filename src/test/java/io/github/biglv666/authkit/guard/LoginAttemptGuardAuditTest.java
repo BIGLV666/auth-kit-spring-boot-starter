@@ -31,6 +31,21 @@ class LoginAttemptGuardAuditTest {
     }
 
     @Test
+    void multipleAuditListenersAreAllNotified() {
+        LoginAttemptGuard guard = new LoginAttemptGuard(new InMemoryAttemptStore(), 2, 60_000, "test");
+        List<AuthKitAuditEvent> first = new CopyOnWriteArrayList<>();
+        List<AuthKitAuditEvent> second = new CopyOnWriteArrayList<>();
+        guard.addAuditListener(first::add);
+        guard.addAuditListener(second::add);
+
+        guard.recordFailure("alice");
+
+        assertEquals(1, first.size());
+        assertEquals(1, second.size());
+        assertEquals(AuthKitAuditEvent.Action.LOGIN_FAILURE, second.get(0).getAction());
+    }
+
+    @Test
     void riskControlModeAuditsFailureEvenThoughCounterIsConsumedInCheck() {
         RiskControlPolicy policy = new RiskControlPolicy(
                 60_000, 1, List.of(60_000L), 3_600_000, 7_200_000, true);

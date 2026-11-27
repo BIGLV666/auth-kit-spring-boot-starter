@@ -23,7 +23,7 @@ auth-kit:
                                        # jwt（签名 JWT 自校验：无滑动续期/实时活跃数据，登出踢人靠墓碑黑名单）
     jwt-secret: ""                     # mode=jwt 时必填，HS256 密钥，至少 16 字符（建议 32+）
     remember-timeout: 30d              # 记住我会话的绝对有效期（login(..., rememberMe=true) 时生效）
-    query-parameter-name: ""           # 可选查询参数名（如 access_token）；默认空=不读。
+    query-parameter-name: ""           # 可选查询参数名（如 access_token）；默认空=不读，且仅 GET 生效。
                                        # 仅供 EventSource/SSE 等不能设 Header 的场景；query token 会进日志/Referer，优先 Cookie
 
   session:

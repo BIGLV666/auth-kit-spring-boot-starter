@@ -47,8 +47,9 @@ public class RedisSessionDao implements SessionDao {
             Long.class);
 
     private static final String LOGIN_LOCK_KEY = ":lock:login:";
-    private static final long LOGIN_LOCK_TTL_MILLIS = 5_000;
-    private static final long LOGIN_LOCK_WAIT_MILLIS = 3_000;
+    /** 锁只保护若干 Redis 索引操作（事件发布已在锁外），30s 足以覆盖慢 Redis/GC，崩溃也能自动释放 */
+    private static final long LOGIN_LOCK_TTL_MILLIS = 30_000;
+    private static final long LOGIN_LOCK_WAIT_MILLIS = 2_000;
 
     /** 仅释放自己持有的锁，避免 TTL 过期后误删别人的锁 */
     private static final RedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
@@ -186,7 +187,8 @@ public class RedisSessionDao implements SessionDao {
     /**
      * 分布式登录互斥：同一 userId + device 的「写索引 + 顶号驱逐」串行执行，
      * 防止并发登录互相驱逐导致最终没有任何有效会话。
-     * <p>Redis 锁 TTL 5s，等待上限 3s；获取超时降级为无锁执行（可用性优先），并记录告警。</p>
+     * <p>Redis 锁 TTL 30s，等待上限 2s；获取超时降级为无锁执行（可用性优先），并记录告警。
+     * 临界区只包含 Redis 索引操作，事件发布已移到锁外，避免慢监听器导致锁过期。</p>
      */
     @Override
     public void runExclusive(String userId, String device, Runnable action) {
