@@ -142,7 +142,30 @@ public Result<?> login(String username, String password) {
 }
 ```
 
-计数在 Redis（固定窗口），多实例共享；无 Redis 自动降级内存。`fail-max-attempts<=0` 完全关闭。
+默认 `guard.mode=counter`：固定窗口计数，计数在 Redis，多实例共享；无 Redis 自动降级内存。`fail-max-attempts<=0` 完全关闭。
+
+#### risk-control 模式（滑动尝试窗口 + 递增风控）
+
+```yaml
+auth-kit:
+  guard:
+    mode: risk-control
+    fail-max-attempts: 5         # 每个尝试窗口最多 5 次
+    attempt-window: 5m           # 滚动窗口
+    lockout-durations: [5m, 15m, 1h, 6h, 24h]  # 连续风控升级档位，封顶 24h
+    lockout-reset-interval: 6h   # 上一次风控结束 6h 内再次触发才升级
+```
+
+业务代码不变，仍是 `check → verify → recordFailure/recordSuccess`，但语义是：
+
+- `check(identifier)` 会原子占用一次尝试额度；窗口内第 6 次直接抛 `LoginLockedException`。
+- 风控时长按连续风控次数升级：5m → 15m → 1h → 6h → 24h；静默期超过 6h 后回到第一档。
+- `recordFailure()` 在此模式下是 no-op（尝试已在 `check()` 计数）。
+- `recordSuccess()` 默认清空尝试窗口，但不清连续风控次数。
+- 风控状态 key 为 `{key-prefix}:risk:<identifier>`，与 counter 模式的 `...:attempt:...` 隔离。
+- 内存实现单实例；Redis 实现走 Lua 原子脚本，要求实例时钟同步。
+
+需要落库或接入统一风控平台时，注册自定义 `RiskControlStore` Bean 即可替换默认实现。
 
 ### 3.7 管理端点（现成 HTTP 接口，默认关闭）
 

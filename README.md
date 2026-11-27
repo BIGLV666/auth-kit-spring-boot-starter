@@ -27,7 +27,7 @@
 | 五种下线语义 | NO_TOKEN / TOKEN_INVALID / TOKEN_TIMEOUT / KICKED_OUT / BE_REPLACED |
 | 异常统一出口 | 有 web-common → Result(40100/40300)；无 → 原生 401/403 |
 | BCrypt + PasswordEncoder SPI | 类路径有 spring-security-crypto 自动提供，否则业务自配 |
-| 登录防爆破 | `LoginAttemptGuard` 三段式插桩，Redis 计数、内存降级 |
+| 登录防爆破 | `LoginAttemptGuard` 三段式插桩；默认固定窗口计数，可选 risk-control 滑动尝试窗口 + 递增风控（5m→15m→1h→6h→24h） |
 | 管理端点 | 在线会话查询/强制下线；静态令牌保护，默认关闭，启用必须配令牌 |
 | 记住我 | `login(userId, device, rememberMe)`，remember 会话走 `remember-timeout` 长效期 |
 | 二级认证 | `@RequireSafe` + `openSafe/isSafe/closeSafe`，敏感操作 N 分钟免二次验密 |
@@ -45,7 +45,7 @@
 <dependency>
     <groupId>io.github.biglv666</groupId>
     <artifactId>auth-kit-spring-boot-starter</artifactId>
-    <version>1.2.0</version>
+    <version>1.3.0</version>
 </dependency>
 ```
 
@@ -106,6 +106,16 @@ auth-kit:
     max-sessions-per-device: 1
   whitelist:
     - /login
+```
+
+防爆破默认使用固定窗口计数；需要「连续风控升级」时启用 `guard.mode=risk-control`（滑动尝试窗口 + 递增封禁），常用参数如下，完整项见[配置全参考](docs/CONFIGURATION.md)：
+
+```yaml
+auth-kit:
+  guard:
+    mode: risk-control
+    attempt-window: 5m
+    fail-max-attempts: 5
 ```
 
 全部配置项、管理端点与扩展点替换见[配置全参考](docs/CONFIGURATION.md)；OAuth2 / SSO 配置见[使用手册第 9 节](docs/USAGE.md#9-oauth2--sso)。
