@@ -10,9 +10,13 @@ permissions:
 
 jobs:
   publish:
+    # 默认只做“可运行的模板”：仓库变量 PUBLISH_ENABLED=true 时才真正发布，避免
+    # tag 一推就触发未配置 secrets 的发布任务。首次启用前：
+    #   1) 配置 secrets：CENTRAL_USERNAME / CENTRAL_PASSWORD / GPG_PRIVATE_KEY / GPG_PASSPHRASE
+    #   2) Settings → Environments 为 maven-central 配置 Required reviewers
+    #   3) Settings → Variables 设置 PUBLISH_ENABLED=true
+    if: vars.PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
-    # 在 GitHub 仓库 Settings → Environments 中为 maven-central 配置 Required reviewers，
-    # 实现 tag 推送后的人工审批闸门；未配置时该 job 会直接执行。
     environment: maven-central
     services:
       redis:
