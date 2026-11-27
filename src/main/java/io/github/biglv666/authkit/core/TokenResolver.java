@@ -4,19 +4,28 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 
 /**
- * Token 解析器：按配置从请求头（可选 Cookie）中提取登录凭证。
+ * Token 解析器：按配置从请求头、Cookie 或（可选）查询参数中提取登录凭证。
  * <p>支持 "Bearer xxx" 前缀风格（前缀剥离大小写不敏感），也支持裸 token。</p>
+ * <p><b>查询参数默认关闭</b>（{@code auth-kit.token.query-parameter-name} 为空）。
+ * 仅建议给 {@code EventSource}（无法自定义请求头）使用；query token 会进入访问日志、
+ * 浏览器历史和 Referer，生产优先使用 HttpOnly Cookie。</p>
  */
 public class TokenResolver {
 
     private final String headerName;
     private final String cookieName;
     private final String prefix;
+    private final String queryParameterName;
 
     public TokenResolver(String headerName, String cookieName, String prefix) {
+        this(headerName, cookieName, prefix, "");
+    }
+
+    public TokenResolver(String headerName, String cookieName, String prefix, String queryParameterName) {
         this.headerName = headerName;
         this.cookieName = cookieName;
         this.prefix = prefix;
+        this.queryParameterName = queryParameterName;
     }
 
     /**
@@ -28,6 +37,10 @@ public class TokenResolver {
         String value = request.getHeader(headerName);
         if (value == null || value.isBlank()) {
             value = resolveFromCookie(request);
+        }
+        if ((value == null || value.isBlank())
+                && queryParameterName != null && !queryParameterName.isBlank()) {
+            value = request.getParameter(queryParameterName);
         }
         if (value == null || value.isBlank()) {
             return null;

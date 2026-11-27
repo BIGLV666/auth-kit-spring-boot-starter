@@ -64,6 +64,17 @@
             <artifactId>spring-security-crypto</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- 可观测性：宿主是否引入 Actuator / Micrometer 由使用方决定，不传递 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-actuator</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
         <dependency>
             <groupId>io.github.biglv666</groupId>
             <artifactId>web-common-spring-boot-starter</artifactId>
@@ -201,6 +212,10 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
                         <version>3.1.0</version>
+                        <configuration>
+                            <!-- 口令从 ~/.m2/settings.xml 的 server id=gpg.passphrase 读取；CI 由 workflow 注入 -->
+                            <passphraseServerId>gpg.passphrase</passphraseServerId>
+                        </configuration>
                         <executions>
                             <execution>
                                 <id>sign-artifacts</id>

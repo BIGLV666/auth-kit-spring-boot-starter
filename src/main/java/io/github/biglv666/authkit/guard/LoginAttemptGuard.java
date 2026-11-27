@@ -1,8 +1,10 @@
 package io.github.biglv666.authkit.guard;
 
 import io.github.biglv666.authkit.dao.AttemptStore;
+import io.github.biglv666.authkit.event.AuthKitAuditEvent;
 import io.github.biglv666.authkit.exception.LoginLockedException;
 
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 /**
@@ -33,6 +35,8 @@ public class LoginAttemptGuard {
     private final String keyPrefix;
     private final boolean enabled;
     private final LongSupplier clock;
+    /** 认证审计监听（登录失败/锁定）；异常不得影响主流程 */
+    private volatile Consumer<AuthKitAuditEvent> auditListener;
 
     public LoginAttemptGuard(AttemptStore attemptStore, int failMaxAttempts, long lockDurationMillis) {
         this(attemptStore, failMaxAttempts, lockDurationMillis, DEFAULT_KEY_PREFIX);
@@ -80,6 +84,23 @@ public class LoginAttemptGuard {
         return enabled;
     }
 
+    /** 注册认证审计监听（自动装配接入 Spring 事件广播/指标/审计日志） */
+    public void setAuditListener(Consumer<AuthKitAuditEvent> auditListener) {
+        this.auditListener = auditListener;
+    }
+
+    private void publishAudit(AuthKitAuditEvent.Action action, String identifier, String reason) {
+        Consumer<AuthKitAuditEvent> listener = auditListener;
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.accept(new AuthKitAuditEvent(action, identifier, null, reason));
+        } catch (Exception ignored) {
+            // 监听器异常不得影响主流程
+        }
+    }
+
     /**
      * 登录前检查：若该标识处于锁定窗口内则抛出 {@link LoginLockedException}。
      * <p>risk-control 模式下，通过检查会原子占用一次尝试额度；未通过则直接触发/返回风控。</p>
@@ -94,6 +115,7 @@ public class LoginAttemptGuard {
             RiskDecision decision = riskControlStore.check(key(identifier), riskPolicy, clock.getAsLong());
             if (!decision.allowed()) {
                 long remaining = decision.retryAfterMillis();
+                publishAudit(AuthKitAuditEvent.Action.LOCKED_OUT, identifier, String.valueOf(remaining));
                 throw new LoginLockedException(
                         "尝试次数过多，账户已被风控，请约 " + remainingMinutes(remaining) + " 分钟后再试",
                         remaining);
@@ -102,6 +124,7 @@ public class LoginAttemptGuard {
         }
         long count = attemptStore.get(key(identifier));
         if (count >= failMaxAttempts) {
+            publishAudit(AuthKitAuditEvent.Action.LOCKED_OUT, identifier, String.valueOf(lockDurationMillis));
             throw new LoginLockedException(
                     "登录失败次数过多，账户已锁定，请约 " + remainingMinutes(lockDurationMillis) + " 分钟后再试",
                     lockDurationMillis);
@@ -117,9 +140,12 @@ public class LoginAttemptGuard {
             return;
         }
         if (riskControlStore != null) {
+            // risk-control 模式：尝试额度已在 check() 原子占用，这里只补审计事件
+            publishAudit(AuthKitAuditEvent.Action.LOGIN_FAILURE, identifier, null);
             return;
         }
         attemptStore.incr(key(identifier), lockDurationMillis);
+        publishAudit(AuthKitAuditEvent.Action.LOGIN_FAILURE, identifier, null);
     }
 
     /**

@@ -23,6 +23,8 @@ public class AuthKitProperties {
     private final Guard guard = new Guard();
     private final Safe safe = new Safe();
     private final Management management = new Management();
+    private final Context context = new Context();
+    private final Observability observability = new Observability();
     /** 放行路径白名单（Ant 风格） */
     private List<String> whitelist = new ArrayList<>(List.of("/login", "/actuator/**"));
 
@@ -46,6 +48,11 @@ public class AuthKitProperties {
         private String jwtSecret = "";
         /** 记住我会话的有效期（覆盖 timeout） */
         private Duration rememberTimeout = Duration.ofDays(30);
+        /**
+         * 可选的查询参数名（如 access_token）。默认空=不读查询参数。
+         * 仅建议给 EventSource/SSE 使用；query token 会进入访问日志与 Referer，生产优先用 Cookie。
+         */
+        private String queryParameterName = "";
 
         public String getHeaderName() {
             return headerName;
@@ -117,6 +124,14 @@ public class AuthKitProperties {
 
         public void setRememberTimeout(Duration rememberTimeout) {
             this.rememberTimeout = rememberTimeout;
+        }
+
+        public String getQueryParameterName() {
+            return queryParameterName;
+        }
+
+        public void setQueryParameterName(String queryParameterName) {
+            this.queryParameterName = queryParameterName;
         }
     }
 
@@ -291,12 +306,16 @@ public class AuthKitProperties {
     public static class Management {
         /** 是否启用管理端点（在线会话查询/强制下线） */
         private boolean enabled = false;
-        /** 管理端点静态令牌；启用时必填 */
+        /** 管理端点静态令牌（兼容单令牌配置）；启用时 auth-token 与 auth-tokens 至少一个非空 */
         private String authToken = "";
+        /** 多令牌配置：支持灰度/轮换，任一匹配即通过；与 auth-token 合并生效 */
+        private List<String> authTokens = new ArrayList<>();
         /** 静态令牌请求头名称 */
         private String authHeader = "X-Auth-Kit-Token";
         /** 管理端点基础路径 */
         private String basePath = "/auth-kit";
+        /** 在线会话查询单次最多返回条数，防止一次性拉取过大 */
+        private int maxOnlineSessions = 200;
 
         public boolean isEnabled() {
             return enabled;
@@ -329,6 +348,96 @@ public class AuthKitProperties {
         public void setBasePath(String basePath) {
             this.basePath = basePath;
         }
+
+        public List<String> getAuthTokens() {
+            return authTokens;
+        }
+
+        public void setAuthTokens(List<String> authTokens) {
+            this.authTokens = authTokens;
+        }
+
+        public int getMaxOnlineSessions() {
+            return maxOnlineSessions;
+        }
+
+        public void setMaxOnlineSessions(int maxOnlineSessions) {
+            this.maxOnlineSessions = maxOnlineSessions;
+        }
+
+        /** 合并单令牌与多令牌，过滤空白值 */
+        public List<String> effectiveTokens() {
+            List<String> tokens = new ArrayList<>();
+            if (authToken != null && !authToken.isBlank()) {
+                tokens.add(authToken);
+            }
+            if (authTokens != null) {
+                for (String token : authTokens) {
+                    if (token != null && !token.isBlank() && !tokens.contains(token)) {
+                        tokens.add(token);
+                    }
+                }
+            }
+            return tokens;
+        }
+    }
+
+    /** 异步上下文传递配置 */
+    public static class Context {
+        /** 是否注册默认 TaskDecorator，把 AuthContext 透传到 Spring 线程池任务（默认关闭） */
+        private boolean propagateAsync = false;
+
+        public boolean isPropagateAsync() {
+            return propagateAsync;
+        }
+
+        public void setPropagateAsync(boolean propagateAsync) {
+            this.propagateAsync = propagateAsync;
+        }
+    }
+
+    /** 可观测性配置（Micrometer/Actuator 均为可选依赖） */
+    public static class Observability {
+        /** 是否注册默认审计日志（auth-kit.audit logger） */
+        private boolean auditLog = true;
+        /** 是否注册 Micrometer 指标（类路径存在 MeterRegistry 时生效） */
+        private boolean metrics = true;
+        /** 是否注册 Actuator 健康检查（类路径存在 actuator 时生效） */
+        private boolean health = true;
+        /** 内存会话存储时健康检查是否报告 UP；生产建议设为 false 让降级暴露为 DOWN */
+        private boolean memoryStoreHealthUp = true;
+
+        public boolean isAuditLog() {
+            return auditLog;
+        }
+
+        public void setAuditLog(boolean auditLog) {
+            this.auditLog = auditLog;
+        }
+
+        public boolean isMetrics() {
+            return metrics;
+        }
+
+        public void setMetrics(boolean metrics) {
+            this.metrics = metrics;
+        }
+
+        public boolean isHealth() {
+            return health;
+        }
+
+        public void setHealth(boolean health) {
+            this.health = health;
+        }
+
+        public boolean isMemoryStoreHealthUp() {
+            return memoryStoreHealthUp;
+        }
+
+        public void setMemoryStoreHealthUp(boolean memoryStoreHealthUp) {
+            this.memoryStoreHealthUp = memoryStoreHealthUp;
+        }
     }
 
     public boolean isEnabled() {
@@ -357,6 +466,14 @@ public class AuthKitProperties {
 
     public Management getManagement() {
         return management;
+    }
+
+    public Context getContext() {
+        return context;
+    }
+
+    public Observability getObservability() {
+        return observability;
     }
 
     public List<String> getWhitelist() {

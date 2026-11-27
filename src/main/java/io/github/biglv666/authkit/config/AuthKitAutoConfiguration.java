@@ -21,7 +21,9 @@ import io.github.biglv666.authkit.guard.LoginAttemptGuard;
 import io.github.biglv666.authkit.guard.RiskControlPolicy;
 import io.github.biglv666.authkit.guard.RiskControlStore;
 import io.github.biglv666.authkit.interceptor.AuthInterceptor;
+import io.github.biglv666.authkit.management.ConfigManagementTokenProvider;
 import io.github.biglv666.authkit.management.ManagementTokenFilter;
+import io.github.biglv666.authkit.management.ManagementTokenProvider;
 import io.github.biglv666.authkit.management.OnlineSessionController;
 import io.github.biglv666.authkit.oauth2.OAuth2Properties;
 import io.github.biglv666.authkit.oauth2.client.GitHubIdentityProvider;
@@ -49,6 +51,7 @@ import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
@@ -229,7 +232,8 @@ public class AuthKitAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean
     public TokenResolver tokenResolver(AuthKitProperties properties) {
-        return new TokenResolver(properties.getHeaderName(), properties.getCookieName(), properties.getPrefix());
+        return new TokenResolver(properties.getHeaderName(), properties.getCookieName(),
+                properties.getPrefix(), properties.getToken().getQueryParameterName());
     }
 
     // ── 扩展层 ──
@@ -404,16 +408,86 @@ public class AuthKitAutoConfiguration {
         return new InMemoryOAuth2KeyValueStore();
     }
 
-    /** 会话事件 → Spring 事件广播（SSO 各应用监听做本地清理） */
+    /**
+     * 会话事件 / 认证审计事件 → Spring 事件广播。
+     * <p>使用 addEventListener/addAuditListener，允许 SSO、指标、审计日志各自监听、互不覆盖。</p>
+     */
     @Bean
     public InitializingBean authKitEventBridge(AuthManager authManager,
+                                               ObjectProvider<LoginAttemptGuard> guardProvider,
                                                ObjectProvider<ApplicationEventPublisher> publisherProvider) {
         return () -> {
             ApplicationEventPublisher publisher = publisherProvider.getIfAvailable();
-            if (publisher != null) {
-                authManager.setEventListener(publisher::publishEvent);
+            if (publisher == null) {
+                return;
+            }
+            authManager.addEventListener(publisher::publishEvent);
+            authManager.addAuditListener(publisher::publishEvent);
+            LoginAttemptGuard guard = guardProvider.getIfAvailable();
+            if (guard != null) {
+                guard.setAuditListener(publisher::publishEvent);
             }
         };
+    }
+
+    // ── 可观测性：全部可选依赖，缺失时静默不装配 ──
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
+    @ConditionalOnBean(io.micrometer.core.instrument.MeterRegistry.class)
+    static class MetricsConfig {
+
+        @Bean
+        @ConditionalOnMissingBean
+        @ConditionalOnProperty(prefix = "auth-kit.observability", name = "metrics",
+                havingValue = "true", matchIfMissing = true)
+        public io.github.biglv666.authkit.observability.AuthKitMetrics authKitMetrics(
+                io.micrometer.core.instrument.MeterRegistry registry) {
+            return new io.github.biglv666.authkit.observability.AuthKitMetrics(registry);
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = "org.springframework.boot.actuate.health.HealthIndicator")
+    @ConditionalOnProperty(prefix = "auth-kit.observability", name = "health",
+            havingValue = "true", matchIfMissing = true)
+    static class HealthConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(name = "authKitHealthIndicator")
+        public org.springframework.boot.actuate.health.HealthIndicator authKitHealthIndicator(
+                SessionDao sessionDao,
+                ObjectProvider<RedisConnectionFactory> factoryProvider,
+                AuthKitProperties properties) {
+            return new io.github.biglv666.authkit.observability.AuthKitHealthIndicator(
+                    factoryProvider.getIfAvailable(), sessionDao,
+                    properties.getObservability().isMemoryStoreHealthUp());
+        }
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "auth-kit.observability", name = "audit-log",
+            havingValue = "true", matchIfMissing = true)
+    static class AuditLogConfig {
+
+        @Bean
+        @ConditionalOnMissingBean
+        public io.github.biglv666.authkit.observability.AuthKitAuditLogger authKitAuditLogger() {
+            return new io.github.biglv666.authkit.observability.AuthKitAuditLogger();
+        }
+    }
+
+    /** 可选的异步上下文传递：注册默认 TaskDecorator（业务自定义优先） */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnProperty(prefix = "auth-kit.context", name = "propagate-async", havingValue = "true")
+    static class AsyncContextConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(org.springframework.core.task.TaskDecorator.class)
+        public org.springframework.core.task.TaskDecorator authContextTaskDecorator() {
+            log.info("[auth-kit] 已注册 AuthContextTaskDecorator（异步上下文透传）");
+            return new io.github.biglv666.authkit.context.AuthContextTaskDecorator();
+        }
     }
 
     // ── Web 层 ──
@@ -453,19 +527,34 @@ public class AuthKitAutoConfiguration {
     static class ManagementConfig {
 
         @Bean
-        public OnlineSessionController onlineSessionController(AuthManager authManager) {
-            return new OnlineSessionController(authManager);
+        @ConditionalOnMissingBean
+        public ManagementTokenProvider managementTokenProvider(AuthKitProperties properties) {
+            return new ConfigManagementTokenProvider(properties.getManagement());
         }
 
         @Bean
-        public FilterRegistrationBean<ManagementTokenFilter> managementTokenFilter(AuthKitProperties properties) {
-            String authToken = properties.getAuthToken();
-            if (authToken == null || authToken.isBlank()) {
-                throw new IllegalStateException(
-                        "auth-kit.management.enabled=true 时必须配置 auth-kit.management.auth-token（管理端点静态令牌）");
+        public OnlineSessionController onlineSessionController(AuthManager authManager,
+                                                               AuthKitProperties properties) {
+            return new OnlineSessionController(authManager,
+                    properties.getManagement().getMaxOnlineSessions());
+        }
+
+        @Bean
+        public FilterRegistrationBean<ManagementTokenFilter> managementTokenFilter(
+                AuthKitProperties properties, ManagementTokenProvider tokenProvider) {
+            java.util.Collection<String> tokens = tokenProvider.tokens();
+            if (tokens == null || tokens.isEmpty()) {
+                if (tokenProvider instanceof ConfigManagementTokenProvider) {
+                    throw new IllegalStateException(
+                            "auth-kit.management.enabled=true 时必须配置 auth-kit.management.auth-token 或 auth-tokens（管理端点令牌）");
+                }
+                // 自定义动态 Provider 允许启动时为空（例如从配置中心异步加载），但必须显式告警
+                log.warn("[auth-kit] 自定义 ManagementTokenProvider 启动时无令牌，管理端点将拒绝所有请求直到提供令牌");
             }
             ManagementTokenFilter filter = new ManagementTokenFilter(
-                    properties.getBasePath(), properties.getAuthHeader(), authToken);
+                    properties.getManagement().getBasePath(),
+                    properties.getManagement().getAuthHeader(),
+                    tokenProvider);
             FilterRegistrationBean<ManagementTokenFilter> registration = new FilterRegistrationBean<>(filter);
             registration.addUrlPatterns("/*");
             registration.setOrder(1);

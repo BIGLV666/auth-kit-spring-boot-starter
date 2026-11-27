@@ -1,5 +1,8 @@
 package io.github.biglv666.authkit.core;
 
+import java.util.Objects;
+import java.util.concurrent.Callable;
+
 /**
  * 请求级认证上下文（ThreadLocal）：由鉴权拦截器在请求入口填充，
  * afterCompletion 阶段强制清理，避免线程池复用导致的数据串号。
@@ -47,5 +50,53 @@ public final class AuthContext {
     /** 清理上下文，必须在请求结束时调用（拦截器 afterCompletion 已自动处理） */
     public static void clear() {
         HOLDER.remove();
+    }
+
+    /**
+     * 包装 {@link Runnable}：把当前请求的认证上下文带到目标线程执行，
+     * 执行完恢复目标线程原有的上下文（避免线程池复用时串号）。
+     *
+     * <pre>{@code
+     * executor.execute(AuthContext.wrap(() -> service.doAsync()));
+     * }</pre>
+     */
+    public static Runnable wrap(Runnable task) {
+        Objects.requireNonNull(task, "task");
+        AuthInfo captured = HOLDER.get();
+        return () -> {
+            AuthInfo previous = HOLDER.get();
+            restore(captured);
+            try {
+                task.run();
+            } finally {
+                restore(previous);
+            }
+        };
+    }
+
+    /**
+     * 包装 {@link Callable}：把当前请求的认证上下文带到目标线程，返回时恢复。
+     * <p>适用于 {@code ExecutorService.submit}/{@code CompletableFuture.supplyAsync} 等有返回值的场景。</p>
+     */
+    public static <T> Callable<T> wrap(Callable<T> task) {
+        Objects.requireNonNull(task, "task");
+        AuthInfo captured = HOLDER.get();
+        return () -> {
+            AuthInfo previous = HOLDER.get();
+            restore(captured);
+            try {
+                return task.call();
+            } finally {
+                restore(previous);
+            }
+        };
+    }
+
+    private static void restore(AuthInfo info) {
+        if (info == null) {
+            HOLDER.remove();
+        } else {
+            HOLDER.set(info);
+        }
     }
 }

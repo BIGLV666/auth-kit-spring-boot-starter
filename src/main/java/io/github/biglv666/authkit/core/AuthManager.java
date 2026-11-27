@@ -14,6 +14,8 @@ import io.github.biglv666.authkit.token.OpaqueTokenCodec;
 import io.github.biglv666.authkit.token.TokenCodec;
 import io.github.biglv666.authkit.token.TokenGenerator;
 import io.github.biglv666.authkit.dao.SessionDao;
+import io.github.biglv666.authkit.event.AuthKitAuditEvent;
+import io.github.biglv666.authkit.event.AuthKitSessionEvent;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -21,6 +23,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.Consumer;
 import java.util.function.LongSupplier;
 
 /**
@@ -44,8 +48,10 @@ public class AuthManager {
     private volatile PermissionProvider permissionProvider;
     private volatile SafeStore safeStore;
     private volatile TokenCodec tokenCodec = new OpaqueTokenCodec();
-    /** 可选的 Spring 事件发布器：登出/踢人/顶号时发布 AuthKitSessionEvent（SSO 本地清理用） */
-    private volatile java.util.function.Consumer<io.github.biglv666.authkit.event.AuthKitSessionEvent> eventListener;
+    /** 会话事件监听器：登出/踢人/顶号/顶号时通知（SSO 本地清理、指标、审计） */
+    private final List<Consumer<AuthKitSessionEvent>> eventListeners = new CopyOnWriteArrayList<>();
+    /** 认证审计监听器：登录成功/失败/锁定（指标、审计日志） */
+    private final List<Consumer<AuthKitAuditEvent>> auditListeners = new CopyOnWriteArrayList<>();
 
     public AuthManager(SessionDao sessionDao, TokenGenerator tokenGenerator,
                        long timeoutMillis, long activeTimeoutMillis, int maxSessionsPerDevice) {
@@ -95,16 +101,61 @@ public class AuthManager {
         this.deviceMaxSessions = deviceMaxSessions == null ? Map.of() : deviceMaxSessions;
     }
 
-    /** 注册会话事件监听（自动装配接入 Spring 事件广播），可空 */
-    public void setEventListener(java.util.function.Consumer<io.github.biglv666.authkit.event.AuthKitSessionEvent> eventListener) {
-        this.eventListener = eventListener;
+    /**
+     * 注册会话事件监听（单监听器语义：覆盖已有监听）。
+     * <p>需要多个监听器时改用 {@link #addEventListener(Consumer)}。</p>
+     */
+    public void setEventListener(Consumer<AuthKitSessionEvent> eventListener) {
+        eventListeners.clear();
+        if (eventListener != null) {
+            eventListeners.add(eventListener);
+        }
     }
 
-    private void publishEvent(String userId, String credential, io.github.biglv666.authkit.event.AuthKitSessionEvent.Action action) {
-        java.util.function.Consumer<io.github.biglv666.authkit.event.AuthKitSessionEvent> listener = eventListener;
-        if (listener != null && userId != null) {
+    /** 追加会话事件监听（SSO 广播、指标、审计可各自注册，互不覆盖） */
+    public void addEventListener(Consumer<AuthKitSessionEvent> eventListener) {
+        if (eventListener != null) {
+            eventListeners.add(eventListener);
+        }
+    }
+
+    /** 追加认证审计监听（登录成功/失败/锁定） */
+    public void addAuditListener(Consumer<AuthKitAuditEvent> auditListener) {
+        if (auditListener != null) {
+            auditListeners.add(auditListener);
+        }
+    }
+
+    /** 覆盖认证审计监听（单监听器语义） */
+    public void setAuditListener(Consumer<AuthKitAuditEvent> auditListener) {
+        auditListeners.clear();
+        if (auditListener != null) {
+            auditListeners.add(auditListener);
+        }
+    }
+
+    private void publishEvent(String userId, String credential, AuthKitSessionEvent.Action action) {
+        if (userId == null || eventListeners.isEmpty()) {
+            return;
+        }
+        AuthKitSessionEvent event = new AuthKitSessionEvent(userId, credential, action);
+        for (Consumer<AuthKitSessionEvent> listener : eventListeners) {
             try {
-                listener.accept(new io.github.biglv666.authkit.event.AuthKitSessionEvent(userId, credential, action));
+                listener.accept(event);
+            } catch (Exception ignored) {
+                // 监听器异常不得影响主流程
+            }
+        }
+    }
+
+    private void publishAudit(AuthKitAuditEvent.Action action, String identifier, String device, String reason) {
+        if (identifier == null || auditListeners.isEmpty()) {
+            return;
+        }
+        AuthKitAuditEvent event = new AuthKitAuditEvent(action, identifier, device, reason);
+        for (Consumer<AuthKitAuditEvent> listener : auditListeners) {
+            try {
+                listener.accept(event);
             } catch (Exception ignored) {
                 // 监听器异常不得影响主流程
             }
@@ -158,6 +209,7 @@ public class AuthManager {
         // 索引与墓碑作用于"下发的凭证"，保证踢人/顶号在两种凭证模式下语义一致
         sessionDao.addToUserIndex(uid, device, credential, now + ttl);
         evictOverflowSessions(uid, device, credential);
+        publishAudit(AuthKitAuditEvent.Action.LOGIN_SUCCESS, uid, device, null);
         return credential;
     }
 
