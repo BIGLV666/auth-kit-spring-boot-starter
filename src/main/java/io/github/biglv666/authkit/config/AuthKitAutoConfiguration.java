@@ -554,17 +554,18 @@ public class AuthKitAutoConfiguration {
                     AuthKitProperties properties) {
                 RedisConnectionFactory factory = factoryProvider.getIfAvailable();
                 java.util.function.Supplier<org.springframework.boot.actuate.health.Health> probe;
-                if (factory != null) {
+                if ("memory".equals(properties.getStore())) {
+                    // 显式选择内存存储：健康检查跟随内存语义，不探测 Redis
+                    probe = null;
+                } else if (factory != null) {
                     probe = new io.github.biglv666.authkit.observability.RedisHealthProbe(factory);
-                } else if (!"memory".equals(properties.getStore())) {
+                } else {
                     // spring-data-redis 在类路径但容器没有 Redis 连接工厂：
                     // auto 会静默降级内存，生产多实例下这是严重问题，健康检查必须报 DOWN。
                     probe = () -> org.springframework.boot.actuate.health.Health.down()
                             .withDetail("store", "redis")
                             .withDetail("error", "RedisConnectionFactory missing")
                             .build();
-                } else {
-                    probe = null;
                 }
                 return new io.github.biglv666.authkit.observability.AuthKitHealthIndicator(
                         sessionDao,
