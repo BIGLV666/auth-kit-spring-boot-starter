@@ -352,8 +352,12 @@ public class AuthKitAutoConfiguration {
 
         @Bean
         @ConditionalOnMissingBean(AuthKitWebCommonExceptionHandler.class)
-        public AuthKitWebCommonExceptionHandler authKitWebCommonExceptionHandler(AuthKitProperties properties) {
-            return new AuthKitWebCommonExceptionHandler(properties.getKickedOutMessage());
+        public AuthKitWebCommonExceptionHandler authKitWebCommonExceptionHandler(
+                AuthKitProperties properties,
+                ObjectProvider<io.github.biglv666.webcommon.config.WebCommonProperties> webCommonProperties) {
+            // web-common 的配置 Bean（存在则支持 SEMANTIC 状态码与 traceId 透传）
+            return new AuthKitWebCommonExceptionHandler(properties.getKickedOutMessage(),
+                    webCommonProperties.getIfAvailable());
         }
     }
 

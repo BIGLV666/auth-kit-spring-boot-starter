@@ -11,6 +11,7 @@
 - **异步上下文传递**：`AuthContext.wrap(Runnable)` / `wrapCallable(Callable)`；`auth-kit.context.propagate-async=true` 时自动注册默认 `TaskDecorator`。
 - **管理端点增强**：多令牌 `management.auth-tokens`、`ManagementTokenProvider` SPI（支持热轮换）、在线会话信息补齐（expireAt/rememberMe/remainingSeconds）与条数上限。
 - **SSE/EventSource**：可选 `token.query-parameter-name` 从查询参数读取 token（默认关闭；文档标注 query token 泄露风险，优先 Cookie）。
+- **web-common 兼容**：与 web-common 0.3.0/0.5.0 均兼容；`http-status-mode=SEMANTIC` 时 auth-kit 错误同步语义化 HTTP 状态码，`trace-id.enabled=true` 时错误 Result 透传 traceId（0.5+，0.3 自动跳过）。
 
 ### Fixed
 
