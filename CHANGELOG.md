@@ -2,13 +2,13 @@
 
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。
 
-## [1.3.0] - 2026-11-27
+## [1.3.0] - 2026-11-28
 
 ### Added
 
 - **risk-control 登录风控**：`guard.mode=risk-control` 支持滑动尝试窗口 + 递增封禁（5m→15m→1h→6h→24h），新增 `RiskControlStore` SPI（内存/Redis）与状态机测试。默认仍为 `counter`，无行为变化。
 - **可观测性**：`AuthKitAuditEvent`（登录成功/失败/锁定）、默认审计日志（logger `auth-kit.audit`，不含 token）、可选 Micrometer 指标（`authkit.login` / `authkit.guard.lockouts` / `authkit.session.events`，标签有界）、Actuator 健康检查（Redis ping；内存降级可配置 UP/DOWN）。
-- **异步上下文传递**：`AuthContext.wrap(Runnable/Callable)`；`auth-kit.context.propagate-async=true` 时自动注册默认 `TaskDecorator`。
+- **异步上下文传递**：`AuthContext.wrap(Runnable)` / `wrapCallable(Callable)`；`auth-kit.context.propagate-async=true` 时自动注册默认 `TaskDecorator`。
 - **管理端点增强**：多令牌 `management.auth-tokens`、`ManagementTokenProvider` SPI（支持热轮换）、在线会话信息补齐（expireAt/rememberMe/remainingSeconds）与条数上限。
 - **SSE/EventSource**：可选 `token.query-parameter-name` 从查询参数读取 token（默认关闭；文档标注 query token 泄露风险，优先 Cookie）。
 
