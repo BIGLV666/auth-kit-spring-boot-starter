@@ -36,6 +36,16 @@
             <artifactId>auth-kit-spring-boot-starter</artifactId>
             <version>${auth-kit.version}</version>
         </dependency>
+        <!-- 与 hisdata 实际技术栈对齐：Boot 4.2 + web-common 0.5.0 -->
+        <dependency>
+            <groupId>io.github.biglv666</groupId>
+            <artifactId>web-common-spring-boot-starter</artifactId>
+            <version>0.5.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

@@ -38,6 +38,8 @@
     <properties>
         <java.version>17</java.version>
         <testcontainers.version>1.21.4</testcontainers.version>
+        <!-- 编译基线；兼容性验证可用 -Dweb-common.version=0.5.0 覆盖（hisdata 实际使用） -->
+        <web-common.version>0.3.0</web-common.version>
     </properties>
 
     <dependencies>
@@ -78,7 +80,7 @@
         <dependency>
             <groupId>io.github.biglv666</groupId>
             <artifactId>web-common-spring-boot-starter</artifactId>
-            <version>0.3.0</version>
+            <version>${web-common.version}</version>
             <optional>true</optional>
         </dependency>
 
