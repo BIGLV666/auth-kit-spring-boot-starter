@@ -39,7 +39,7 @@ class AuthContextWrapTest {
     @Test
     void callableCarriesContextAndReturnsValue() throws Exception {
         AuthContext.set("u-2", "APP", "token-2");
-        Callable<String> task = AuthContext.wrap((Callable<String>) AuthContext::getUserId);
+        Callable<String> task = AuthContext.wrapCallable(AuthContext::getUserId);
         assertEquals("u-2", executor.submit(task).get());
         assertNull(executor.submit(AuthContext::getUserId).get());
     }
@@ -47,7 +47,7 @@ class AuthContextWrapTest {
     @Test
     void restoresPreviousContextOnWorkerThread() throws Exception {
         AuthContext.set("request-user", "PC", "token-3");
-        Callable<String> inner = AuthContext.wrap((Callable<String>) AuthContext::getUserId);
+        Callable<String> inner = AuthContext.wrapCallable(AuthContext::getUserId);
         Callable<String> task = () -> {
             AuthContext.set("worker-previous", "WORKER", "token-worker");
             String inside = inner.call();
@@ -60,7 +60,7 @@ class AuthContextWrapTest {
     @Test
     void noContextPropagatesNothing() throws Exception {
         AuthContext.clear();
-        Callable<String> inner = AuthContext.wrap((Callable<String>) AuthContext::getUserId);
+        Callable<String> inner = AuthContext.wrapCallable(AuthContext::getUserId);
         executor.submit(() -> AuthContext.set("stale", "PC", "stale-token")).get();
         assertNull(executor.submit(inner).get(), "请求未登录时不得把目标线程的旧上下文带进来");
     }

@@ -76,9 +76,10 @@ public final class AuthContext {
 
     /**
      * 包装 {@link Callable}：把当前请求的认证上下文带到目标线程，返回时恢复。
-     * <p>适用于 {@code ExecutorService.submit}/{@code CompletableFuture.supplyAsync} 等有返回值的场景。</p>
+     * <p>适用于 {@link java.util.concurrent.ExecutorService#submit(Callable)} 等有返回值的场景。
+     * 命名与 {@link #wrap(Runnable)} 区分，避免 lambda 重载歧义。</p>
      */
-    public static <T> Callable<T> wrap(Callable<T> task) {
+    public static <T> Callable<T> wrapCallable(Callable<T> task) {
         Objects.requireNonNull(task, "task");
         AuthInfo captured = HOLDER.get();
         return () -> {
