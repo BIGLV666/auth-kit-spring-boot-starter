@@ -4,43 +4,32 @@ import io.github.biglv666.authkit.dao.InMemorySessionDao;
 import io.github.biglv666.authkit.dao.SessionDao;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
-import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
+
+import java.util.function.Supplier;
 
 /**
  * auth-kit 健康检查（Spring Boot Actuator，可选依赖）。
  *
- * <p>有 Redis 会话存储时实际 ping 一次；内存降级时按配置报告 UP 或 DOWN。
- * 错误详情只暴露异常类型，不回显连接串/密钥。</p>
+ * <p>有 Redis 时由 {@link RedisHealthProbe} 提供远程探测；没有 Redis（或类路径无 spring-data-redis）
+ * 时按内存存储配置报告 UP/DOWN。本类刻意不直接引用 Redis 类型，保证无 Redis 依赖时也能加载。</p>
  */
 public class AuthKitHealthIndicator implements HealthIndicator {
 
-    private final RedisConnectionFactory redisConnectionFactory;
     private final SessionDao sessionDao;
     private final boolean memoryStoreUp;
+    private final Supplier<Health> remoteProbe;
 
-    public AuthKitHealthIndicator(RedisConnectionFactory redisConnectionFactory,
-                                  SessionDao sessionDao,
-                                  boolean memoryStoreUp) {
-        this.redisConnectionFactory = redisConnectionFactory;
+    public AuthKitHealthIndicator(SessionDao sessionDao, boolean memoryStoreUp,
+                                  Supplier<Health> remoteProbe) {
         this.sessionDao = sessionDao;
         this.memoryStoreUp = memoryStoreUp;
+        this.remoteProbe = remoteProbe;
     }
 
     @Override
     public Health health() {
-        if (redisConnectionFactory != null) {
-            try (RedisConnection connection = redisConnectionFactory.getConnection()) {
-                connection.ping();
-                return Health.up()
-                        .withDetail("store", "redis")
-                        .build();
-            } catch (Exception e) {
-                return Health.down()
-                        .withDetail("store", "redis")
-                        .withDetail("error", e.getClass().getSimpleName())
-                        .build();
-            }
+        if (remoteProbe != null) {
+            return remoteProbe.get();
         }
         if (sessionDao instanceof InMemorySessionDao) {
             Health.Builder builder = memoryStoreUp ? Health.up() : Health.down();

@@ -36,6 +36,10 @@
 | OAuth2 授权服务器 | `/oauth2/authorize` + `/oauth2/token`，authorization_code + refresh_token；**签发的 access_token 就是本组件会话凭证** |
 | 第三方登录客户端 | `IdentityProvider` SPI，内置 GitHub / 企业微信；业务只实现"档案 → userId"绑定 |
 | 单点登录 | 多应用共享 Redis 会话即 SSO；登出/踢人全局生效 + 会话事件广播 |
+| 可观测性 | 可选 Micrometer 指标（有界标签）、Actuator 健康检查（Redis ping）、默认审计日志（不含 token） |
+| 异步上下文 | `AuthContext.wrap(...)` 或 `context.propagate-async=true` 自动注册 TaskDecorator |
+| 管理令牌轮换 | `management.auth-tokens` 多令牌，或自定义 `ManagementTokenProvider` 热轮换 |
+| SSE 支持 | 可选 `token.query-parameter-name` 读取查询参数，供 EventSource 使用（默认关闭，注意日志泄露风险） |
 
 ## 快速开始
 

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      Boot 4 兼容性验证工程（不参与 auth-kit 发布）。
+      先用仓库根目录 mvn install 安装 1.3.0，再运行：
+        mvn -f compat/boot4/pom.xml -Dauth-kit.version=1.3.0 test
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.2.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>io.github.biglv666.compat</groupId>
+    <artifactId>auth-kit-boot4-compat</artifactId>
+    <version>1.0.0</version>
+    <name>auth-kit Boot 4 compatibility</name>
+
+    <properties>
+        <java.version>17</java.version>
+        <auth-kit.version>1.3.0</auth-kit.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.github.biglv666</groupId>
+            <artifactId>auth-kit-spring-boot-starter</artifactId>
+            <version>${auth-kit.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

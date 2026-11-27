@@ -23,6 +23,8 @@ auth-kit:
                                        # jwt（签名 JWT 自校验：无滑动续期/实时活跃数据，登出踢人靠墓碑黑名单）
     jwt-secret: ""                     # mode=jwt 时必填，HS256 密钥，至少 16 字符（建议 32+）
     remember-timeout: 30d              # 记住我会话的绝对有效期（login(..., rememberMe=true) 时生效）
+    query-parameter-name: ""           # 可选查询参数名（如 access_token）；默认空=不读。
+                                       # 仅供 EventSource/SSE 等不能设 Header 的场景；query token 会进日志/Referer，优先 Cookie
 
   session:
     store: auto                        # auto：有 RedisConnectionFactory 用 Redis，否则内存（WARN 日志）
@@ -62,9 +64,22 @@ auth-kit:
 
   management:
     enabled: false                     # 管理端点总开关（默认关闭）
-    auth-token: ""                     # 静态令牌。enabled=true 时必填，为空启动直接失败（fail-fast）
+    auth-token: ""                     # 单令牌（兼容旧配置）；auth-token 与 auth-tokens 至少一个非空
+    auth-tokens: []                    # 多令牌：任一匹配即通过，便于灰度/轮换。自定义 ManagementTokenProvider Bean 可热轮换
     auth-header: X-Auth-Kit-Token      # 令牌请求头名称
     base-path: /auth-kit               # 管理端点基础路径（按路径段边界匹配，不会误伤 /auth-kit-xxx）
+    max-online-sessions: 200           # 在线会话查询单次最多返回条数（超出截断，按登录时间倒序）
+
+  # 异步上下文传递（默认关闭）。开启后注册默认 TaskDecorator，Spring 线程池任务可读到 AuthContext
+  context:
+    propagate-async: false
+
+  # 可观测性；Micrometer/Actuator 都是可选依赖，类路径没有时自动跳过
+  observability:
+    audit-log: true                    # 默认审计日志（logger: auth-kit.audit；不含 token）
+    metrics: true                      # Micrometer 指标（存在 MeterRegistry 时生效）
+    health: true                       # Actuator 健康检查（存在 HealthIndicator 时生效）
+    memory-store-health-up: true       # 内存会话时健康状态；生产建议 false，让降级暴露为 DOWN
 
   oauth2:                              # 授权服务器与第三方登录默认全关
     server:
@@ -97,7 +112,7 @@ auth-kit:
 
 | 配置 | 读取者 |
 |---|---|
-| token.header-name / cookie-name / prefix | `TokenResolver`（拦截器提取 token） |
+| token.header-name / cookie-name / prefix / query-parameter-name | `TokenResolver`（拦截器提取 token） |
 | token.timeout / active-timeout / remember-timeout | `AuthManager`（登录与校验） |
 | token.mode / jwt-secret | 自动装配（`OpaqueTokenCodec` / `JwtTokenCodec`） |
 | session.store / key-prefix | 自动装配（SessionDao/AttemptStore/SafeStore/RiskControlStore 选择） |
@@ -107,11 +122,13 @@ auth-kit:
 | safe.duration | `AuthManager`（`@RequireSafe` 免密窗口） |
 | whitelist | `AuthInterceptor`（AntPathMatcher） |
 | management.* | `ManagementConfig` / `ManagementTokenFilter` / `OnlineSessionController` |
+| context.propagate-async | 自动装配（`AuthContextTaskDecorator`） |
+| observability.* | `AuthKitMetrics` / `AuthKitHealthIndicator` / `AuthKitAuditLogger` |
 | oauth2.* | OAuth2 自动装配 / 授权服务器 / 第三方登录客户端 |
 
 ## 管理端点 API
 
-启用 `auth-kit.management.enabled=true` 并配置 `auth-token` 后：
+启用 `auth-kit.management.enabled=true` 并配置 `auth-token` 或 `auth-tokens` 后（多令牌任一匹配即可；建议通过环境变量/配置中心注入，不要写进仓库）：
 
 ### GET {base-path}/online
 
@@ -124,8 +141,11 @@ X-Auth-Kit-Token: {auth-token}
 
 200 OK
 [{"token":"jn648VAK****","userId":"10001","device":"APP",
-  "loginTime":1788572683177,"lastActiveTime":1788572683177}]
+  "loginTime":1788572683177,"lastActiveTime":1788572683177,
+  "expireAt":1788575683177,"rememberMe":false,"remainingSeconds":2999}]
 ```
+
+结果按登录时间倒序；超过 `management.max-online-sessions`（默认 200）时截断。
 
 ### DELETE {base-path}/online/{userId}
 

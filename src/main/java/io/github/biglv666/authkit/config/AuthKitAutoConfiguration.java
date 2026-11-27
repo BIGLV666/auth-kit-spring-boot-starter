@@ -83,95 +83,139 @@ public class AuthKitAutoConfiguration {
     private static final Logger log = LoggerFactory.getLogger(AuthKitAutoConfiguration.class);
 
     private static final String WEB_COMMON_RESULT = "io.github.biglv666.webcommon.result.Result";
+    private static final String REDIS_FACTORY =
+            "org.springframework.data.redis.connection.RedisConnectionFactory";
     private static final String SPRING_SECURITY_BCRYPT =
             "org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder";
 
-    // ── 存储层 ──
+    // ── 存储层：按类路径是否存在 spring-data-redis 拆成两套装配 ──
+    //
+    // 不能只靠 optional 依赖：Bean 方法签名直接引用 RedisConnectionFactory 时，
+    // 没有 spring-data-redis 的使用方会在启动期抛 ClassNotFoundException。
+    // 因此 Redis 相关 Bean 必须放进 @ConditionalOnClass 的嵌套配置。
 
-    /**
-     * 会话存储：store=memory 强制内存；auto 时类路径与容器中存在 RedisConnectionFactory 则用 Redis，
-     * 否则降级内存（启动日志提示）；store=redis 但无 Redis 时 fail-fast。
-     */
-    @Bean
-    @ConditionalOnMissingBean(SessionDao.class)
-    public SessionDao sessionDao(AuthKitProperties properties,
-                                 ObjectProvider<RedisConnectionFactory> factoryProvider) {
-        String store = properties.getStore();
-        if ("memory".equals(store)) {
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = REDIS_FACTORY)
+    static class RedisAwareStorageConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(SessionDao.class)
+        public SessionDao sessionDao(AuthKitProperties properties,
+                                     ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            String store = properties.getStore();
+            if ("memory".equals(store)) {
+                return new InMemorySessionDao();
+            }
+            RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+            if (factory != null) {
+                log.info("[auth-kit] 会话存储：Redis（key 前缀 {}）", properties.getKeyPrefix());
+                return new RedisSessionDao(new StringRedisTemplate(factory), properties.getKeyPrefix());
+            }
+            if ("redis".equals(store)) {
+                throw new IllegalStateException(
+                        "auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory，请检查 Redis 配置");
+            }
+            log.warn("[auth-kit] 未检测到 Redis，会话降级为内存存储（仅适合本地开发/单实例部署，重启即失联）");
             return new InMemorySessionDao();
         }
-        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
-        if (factory != null) {
-            log.info("[auth-kit] 会话存储：Redis（key 前缀 {}）", properties.getKeyPrefix());
-            return new RedisSessionDao(new StringRedisTemplate(factory), properties.getKeyPrefix());
-        }
-        if ("redis".equals(store)) {
-            throw new IllegalStateException(
-                    "auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory，请检查 Redis 配置");
-        }
-        log.warn("[auth-kit] 未检测到 Redis，会话降级为内存存储（仅适合本地开发/单实例部署，重启即失联）");
-        return new InMemorySessionDao();
-    }
 
-    /** 登录失败计数存储：选择逻辑同会话存储 */
-    @Bean
-    @ConditionalOnMissingBean(AttemptStore.class)
-    public AttemptStore attemptStore(AuthKitProperties properties,
-                                     ObjectProvider<RedisConnectionFactory> factoryProvider) {
-        String store = properties.getStore();
-        if ("memory".equals(store)) {
+        @Bean
+        @ConditionalOnMissingBean(AttemptStore.class)
+        public AttemptStore attemptStore(AuthKitProperties properties,
+                                         ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            String store = properties.getStore();
+            if ("memory".equals(store)) {
+                return new InMemoryAttemptStore();
+            }
+            RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+            if (factory != null) {
+                return new RedisAttemptStore(new StringRedisTemplate(factory));
+            }
+            if ("redis".equals(store)) {
+                throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
+            }
             return new InMemoryAttemptStore();
         }
-        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
-        if (factory != null) {
-            return new RedisAttemptStore(new StringRedisTemplate(factory));
-        }
-        if ("redis".equals(store)) {
-            throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
-        }
-        return new InMemoryAttemptStore();
-    }
 
-    /** 风控状态存储（risk-control 模式使用）：选择逻辑同会话存储；注册同类型 Bean 可全量替换 */
-    @Bean
-    @ConditionalOnMissingBean(RiskControlStore.class)
-    public RiskControlStore riskControlStore(AuthKitProperties properties,
-                                             ObjectProvider<RedisConnectionFactory> factoryProvider) {
-        boolean riskStoreRequired = properties.getGuard().getMode() == GuardMode.RISK_CONTROL
-                && properties.isGuardEnabled()
-                && properties.getFailMaxAttempts() > 0;
-        String store = properties.getStore();
-        if ("memory".equals(store)) {
+        @Bean
+        @ConditionalOnMissingBean(RiskControlStore.class)
+        public RiskControlStore riskControlStore(AuthKitProperties properties,
+                                                 ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            boolean riskStoreRequired = properties.getGuard().getMode() == GuardMode.RISK_CONTROL
+                    && properties.isGuardEnabled() && properties.getFailMaxAttempts() > 0;
+            String store = properties.getStore();
+            if ("memory".equals(store)) {
+                return new InMemoryRiskControlStore();
+            }
+            RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+            if (factory != null) {
+                return new RedisRiskControlStore(new StringRedisTemplate(factory));
+            }
+            if (riskStoreRequired && "redis".equals(store)) {
+                throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
+            }
             return new InMemoryRiskControlStore();
         }
-        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
-        if (factory != null) {
-            return new RedisRiskControlStore(new StringRedisTemplate(factory));
-        }
-        // 只有 risk-control 模式且守卫真正启用时该 Bean 才被使用，不能因 store=redis 缺 Redis 破坏其他场景启动
-        if (riskStoreRequired && "redis".equals(store)) {
-            throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
-        }
-        return new InMemoryRiskControlStore();
-    }
 
-    /** 二级认证状态存储：选择逻辑同会话存储 */
-    @Bean
-    @ConditionalOnMissingBean(SafeStore.class)
-    public SafeStore safeStore(AuthKitProperties properties,
-                               ObjectProvider<RedisConnectionFactory> factoryProvider) {
-        String store = properties.getStore();
-        if ("memory".equals(store)) {
+        @Bean
+        @ConditionalOnMissingBean(SafeStore.class)
+        public SafeStore safeStore(AuthKitProperties properties,
+                                   ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            String store = properties.getStore();
+            if ("memory".equals(store)) {
+                return new InMemorySafeStore();
+            }
+            RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+            if (factory != null) {
+                return new RedisSafeStore(new StringRedisTemplate(factory), properties.getKeyPrefix());
+            }
+            if ("redis".equals(store)) {
+                throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
+            }
             return new InMemorySafeStore();
         }
-        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
-        if (factory != null) {
-            return new RedisSafeStore(new StringRedisTemplate(factory), properties.getKeyPrefix());
+    }
+
+    /** 类路径没有 spring-data-redis：只能内存；store=redis 时启动失败（fail-fast） */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnMissingClass(REDIS_FACTORY)
+    static class NoRedisStorageConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(SessionDao.class)
+        public SessionDao sessionDao(AuthKitProperties properties) {
+            failIfRedisRequired(properties);
+            log.warn("[auth-kit] 类路径无 spring-data-redis，会话使用内存存储（仅适合本地开发/单实例）");
+            return new InMemorySessionDao();
         }
-        if ("redis".equals(store)) {
-            throw new IllegalStateException("auth-kit.session.store=redis 但容器中不存在 RedisConnectionFactory");
+
+        @Bean
+        @ConditionalOnMissingBean(AttemptStore.class)
+        public AttemptStore attemptStore(AuthKitProperties properties) {
+            failIfRedisRequired(properties);
+            return new InMemoryAttemptStore();
         }
-        return new InMemorySafeStore();
+
+        @Bean
+        @ConditionalOnMissingBean(RiskControlStore.class)
+        public RiskControlStore riskControlStore(AuthKitProperties properties) {
+            failIfRedisRequired(properties);
+            return new InMemoryRiskControlStore();
+        }
+
+        @Bean
+        @ConditionalOnMissingBean(SafeStore.class)
+        public SafeStore safeStore(AuthKitProperties properties) {
+            failIfRedisRequired(properties);
+            return new InMemorySafeStore();
+        }
+
+        private static void failIfRedisRequired(AuthKitProperties properties) {
+            if ("redis".equals(properties.getStore())) {
+                throw new IllegalStateException(
+                        "auth-kit.session.store=redis 但类路径缺少 spring-data-redis，请引入依赖或改用 memory/auto");
+            }
+        }
     }
 
     // ── 核心层 ──
@@ -326,13 +370,6 @@ public class AuthKitAutoConfiguration {
     static class OAuth2ServerConfig {
 
         @Bean
-        @ConditionalOnMissingBean(OAuth2KeyValueStore.class)
-        public OAuth2KeyValueStore oauth2KeyValueStore(AuthKitProperties properties,
-                                                       ObjectProvider<RedisConnectionFactory> factoryProvider) {
-            return AuthKitAutoConfiguration.createOAuth2Store(properties, factoryProvider);
-        }
-
-        @Bean
         public OAuth2AuthorizationServerController oauth2AuthorizationServerController(
                 OAuth2Properties oauth2Properties, OAuth2KeyValueStore oauth2KeyValueStore,
                 AuthManager authManager, TokenResolver tokenResolver) {
@@ -370,13 +407,6 @@ public class AuthKitAutoConfiguration {
     static class OAuth2ClientConfig {
 
         @Bean
-        @ConditionalOnMissingBean(OAuth2KeyValueStore.class)
-        public OAuth2KeyValueStore oauth2KeyValueStoreForClient(AuthKitProperties properties,
-                                                                ObjectProvider<RedisConnectionFactory> factoryProvider) {
-            return AuthKitAutoConfiguration.createOAuth2Store(properties, factoryProvider);
-        }
-
-        @Bean
         public OAuth2ClientController oauth2ClientController(OAuth2Properties oauth2Properties,
                                                              OAuth2KeyValueStore oauth2KeyValueStore,
                                                              AuthManager authManager,
@@ -398,14 +428,36 @@ public class AuthKitAutoConfiguration {
         }
     }
 
-    /** OAuth2 KV 存储选择逻辑：有 Redis 用 Redis，否则内存 */
-    private static OAuth2KeyValueStore createOAuth2Store(AuthKitProperties properties,
-                                                         ObjectProvider<RedisConnectionFactory> factoryProvider) {
-        RedisConnectionFactory factory = factoryProvider.getIfAvailable();
-        if (factory != null) {
-            return new RedisOAuth2KeyValueStore(new StringRedisTemplate(factory), properties.getKeyPrefix());
+    /**
+     * OAuth2 KV 存储：类路径有 spring-data-redis 时优先 Redis，否则内存。
+     * <p>与存储层同样按类存在性隔离，避免无 Redis 依赖的使用方启动失败。</p>
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnClass(name = REDIS_FACTORY)
+    static class RedisOAuth2StoreConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(OAuth2KeyValueStore.class)
+        public OAuth2KeyValueStore oauth2KeyValueStore(AuthKitProperties properties,
+                                                       ObjectProvider<RedisConnectionFactory> factoryProvider) {
+            RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+            if (factory != null) {
+                return new RedisOAuth2KeyValueStore(new StringRedisTemplate(factory),
+                        properties.getKeyPrefix());
+            }
+            return new InMemoryOAuth2KeyValueStore();
         }
-        return new InMemoryOAuth2KeyValueStore();
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnMissingClass(REDIS_FACTORY)
+    static class MemoryOAuth2StoreConfig {
+
+        @Bean
+        @ConditionalOnMissingBean(OAuth2KeyValueStore.class)
+        public OAuth2KeyValueStore oauth2KeyValueStore() {
+            return new InMemoryOAuth2KeyValueStore();
+        }
     }
 
     /**
@@ -453,15 +505,38 @@ public class AuthKitAutoConfiguration {
             havingValue = "true", matchIfMissing = true)
     static class HealthConfig {
 
-        @Bean
-        @ConditionalOnMissingBean(name = "authKitHealthIndicator")
-        public org.springframework.boot.actuate.health.HealthIndicator authKitHealthIndicator(
-                SessionDao sessionDao,
-                ObjectProvider<RedisConnectionFactory> factoryProvider,
-                AuthKitProperties properties) {
-            return new io.github.biglv666.authkit.observability.AuthKitHealthIndicator(
-                    factoryProvider.getIfAvailable(), sessionDao,
-                    properties.getObservability().isMemoryStoreHealthUp());
+        @Configuration(proxyBeanMethods = false)
+        @ConditionalOnClass(name = REDIS_FACTORY)
+        static class RedisHealth {
+
+            @Bean
+            @ConditionalOnMissingBean(name = "authKitHealthIndicator")
+            public org.springframework.boot.actuate.health.HealthIndicator authKitHealthIndicator(
+                    SessionDao sessionDao,
+                    ObjectProvider<RedisConnectionFactory> factoryProvider,
+                    AuthKitProperties properties) {
+                RedisConnectionFactory factory = factoryProvider.getIfAvailable();
+                return new io.github.biglv666.authkit.observability.AuthKitHealthIndicator(
+                        sessionDao,
+                        properties.getObservability().isMemoryStoreHealthUp(),
+                        factory == null ? null
+                                : new io.github.biglv666.authkit.observability.RedisHealthProbe(factory));
+            }
+        }
+
+        @Configuration(proxyBeanMethods = false)
+        @ConditionalOnMissingClass(REDIS_FACTORY)
+        static class MemoryHealth {
+
+            @Bean
+            @ConditionalOnMissingBean(name = "authKitHealthIndicator")
+            public org.springframework.boot.actuate.health.HealthIndicator authKitHealthIndicator(
+                    SessionDao sessionDao, AuthKitProperties properties) {
+                return new io.github.biglv666.authkit.observability.AuthKitHealthIndicator(
+                        sessionDao,
+                        properties.getObservability().isMemoryStoreHealthUp(),
+                        null);
+            }
         }
     }
 
